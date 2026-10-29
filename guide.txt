@@ -1,0 +1,128 @@
+==============================================================================
+ TINY - a tiny text editor for Windows CMD
+------------------------------------------------------------------------------
+ Build:  tcc tiny.c tui_console.c -luser32 -o tiny.exe
+ Run:    tiny.exe              (untitled buffer)
+         tiny.exe notes.txt    (opens notes.txt if it exists, else creates it)
+==============================================================================
+
+
+MOVING AROUND
+------------------------------------------------------------------------------
+  Arrows              move cursor one char / one line
+  Shift+Left          jump to previous word
+  Shift+Right         jump to next word
+  Home                start of line
+  End                 end of line
+  PgUp                up one screen
+  PgDn                down one screen
+
+
+EDITING
+------------------------------------------------------------------------------
+  printable keys      insert at cursor
+  Enter               split line at cursor
+  Backspace           delete char left; at col 0, merge with line above
+  Delete              delete char under cursor; at end of line, merge down
+  F2                  join current line with next line
+
+
+FILES
+------------------------------------------------------------------------------
+  F3                  save.  If the buffer has no filename yet,
+                      prompts for one (blue bar at the bottom).
+  
+  Ctrl+N              new file.  Prompts to save if modified, then asks
+                      for a filename.  If the file exists it is opened;
+                      if not, an empty file is created and opened.
+  
+  Esc                 quit.  Prompts to save if modified.
+
+
+MARKING A BLOCK  (copy / cut / paste)
+------------------------------------------------------------------------------
+  Ctrl+B              first press: mark start at cursor
+                      second press: mark end at cursor
+                      the block is now coloured (black on cyan)
+                      and the marked text is copied to the clipboard
+
+  Ctrl+X              cut: copy the marked block to the clipboard AND
+                      delete it from the buffer.  Cursor moves to
+                      where the block was.
+
+  Ctrl+P              paste: insert the clipboard at the cursor.
+
+  Esc                 while a block is marked, cancels the mark
+                      (does not quit).
+
+  Workflow for moving text:
+    1. Ctrl+B, move cursor to end of block, Ctrl+B  (block marked+ copied)
+    2. Ctrl+X                                       (block deleted)
+    3. move cursor to destination
+    4. Ctrl+P                                       (block pasted)
+
+  Any editing key (typing, Enter, Backspace, Delete, F2, F3, F4,
+  Ctrl+N) cancels an active mark.
+  Arrow keys do not cancel a mark.
+
+
+FINDING TEXT
+------------------------------------------------------------------------------
+  Ctrl+F              prompts for a search string on the blue bar.
+                      Enter jumps to the next occurrence, wrapping
+                      around the end of the document.
+                      Empty input or Esc cancels.
+                      Case-sensitive.
+
+
+SPELL CHECK
+------------------------------------------------------------------------------
+  F4                  saves the file, runs spell.exe, reloads the result.
+                      If the file was untitled, prompts for a name first.
+
+                      spell.exe must be in the same folder as tiny.exe
+                      (or on PATH).  The dictionary file is dict.smd.
+
+                      When spell.exe finishes, press any key to return
+                      to the editor with the corrections loaded.
+                      Press F3 to save the corrected text over the original.
+
+
+STATUS BAR  (bottom line)
+------------------------------------------------------------------------------
+  notes  12:47+  w:1208  !!          F3 SAVE  F4 SPELL  ^F FIND ...
+
+   notes     file name (no path, no .txt extension)
+   96:7      line:column of the cursor
+   +         shown when the view is scrolled horizontally
+   w:1208    word count
+   !!        shown when the file has unsaved changes
+
+  The right-hand side shows the shortcuts available right now.
+  When a block is marked, it shows the clipboard keys instead.
+  When you press Ctrl+N or F3 on an untitled buffer, a blue prompt
+  bar replaces the status bar for the filename input.
+
+
+LIMITS
+------------------------------------------------------------------------------
+  max 4096 lines
+  max 1024 characters per line
+  files are saved with Windows CRLF line endings
+  no undo
+  no horizontal scrolling beyond 80 columns visible
+  clipboard is internal to the editor (not the Windows clipboard)
+
+
+TIPS
+------------------------------------------------------------------------------
+  - If the file was opened with tiny.exe notes.txt, F3 always writes
+    to notes.txt.  To save under a different name, use Ctrl+N to
+    create/open the other file, or rename at the command prompt.
+  - To rename the current document, save with F3, quit with Esc,
+    then rename from the command line with: ren old.txt new.txt
+  - F4 leaves a corrected copy in notes.txt.tmp briefly; the editor
+    loads it and removes it, so you always end up back in the editor.
+  - Terminal must be at least 80x25.  The editor resizes the buffer
+    but not the window.  If CMD opens smaller than 80x25, maximise it
+    before running tiny.exe.

@@ -1,11 +1,33 @@
-SC2 - SUPER LIGHTWEIGHT SPELL CHECKER
-=====================================
+# TinySpell
 
-A spell checker that fits in a single 390 KB file and runs anywhere
-Python 3 runs. No installation, no dependencies, no cloud. It reads a
-text file, shows you the words it doesn't recognise, and lets you fix
-them one by one.
+A spell checker for the Sinclair QL (QDOS) and Windows/Linux, with a
+Python prototype used as the reference implementation.
 
+## What it does
+
+Reads a text file, finds words that are not in the dictionary, shows the
+sentence with the unknown word in `[brackets]` (red on Windows/Linux), and
+offers up to 95 guesses in pages of 5. You can pick a guess, ignore the
+word, or type a replacement. The corrected file is written back.
+
+## Files
+
+| File | Purpose |
+|---|---|
+| `spell.c` | The C port. Builds for QDOS (QL), Windows, and Linux. |
+| `SC2.py` | The Python prototype. Reference behaviour. |
+| `make_smd3.py` | Encodes a plain word list into the `SMD3` dictionary format. |
+| `dict.smd` | The dictionary, ~88,873 words, ~390 KB. |
+| `dic.txt` | The plain word list the dictionary was built from. |
+| `bad.txt` | A test file with deliberate misspellings. |
+
+## Building the C version
+
+### Windows (Tiny C Compiler)
+
+```powershell
+C:\tcc\tcc.exe spell.c -o spell.exe
+.\spell.exe dict.smd bad.txt bad.txt
 
 WHY IT'S LIGHT
 --------------

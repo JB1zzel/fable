@@ -1,0 +1,42 @@
+tiny editor quick guide
+
+## Launch
+bobbings
+tiny.exe
+
+tiny.exe myfile.txt  -> opens myfile.txt
+
+## Keys
+
+ Key         Action
+ ----------------------------------- 
+ Arrows      Move cursor 
+ Shift+Left  Jump to previous word
+ Shift+Right Jump to next word
+ Home        Start of line
+ End         End of line 
+ PgUp/PgDn   Move 24 lines up / down
+ Enter       Split line at cursor
+ Backspace   Delete char left; at col 0 → merge with line above
+ Delete      Delete char under cursor; at end of line merge with line below
+ F2          Join current line with next line
+ F3          Save file
+ Esc         Quit (prompts `Save before quit? (y/n)` if unsaved changes)
+ Printables  Insert character at cursor
+
+## Status bar (bottom row)
+
+ filename  Ln N, Col M  Words: K [modified]
+ Ln / Col** - cursor position (1-based).
+ Words** - live word count (`alnum` + `_` runs).
+ `[modified]`** - shown when there are unsaved changes.
+
+## Notes
+
+- Word movement (Shift+Arrow) works within a line; at line edges it wraps to the
+  adjacent line.
+- Lines display up to 80 columns. Longer lines are stored in full but not 
+  horizontally scrolled.
+- Max 4096 lines, 1024 chars per line.
+- Saves as CRLF line endings (Windows format).
+- No undo. No search.
