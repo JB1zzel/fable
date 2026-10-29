@@ -1,4 +1,8 @@
-# TinySpell
+# Tiny text editor
+
+read guide.txt
+
+# Spellchecker
 
 A spell checker for the Sinclair QL (QDOS) and Windows/Linux, with a
 Python prototype used as the reference implementation.
