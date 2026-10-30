@@ -1,108 +1,85 @@
 # Tiny text editor
 
-read guide.txt
-
-# Spellchecker
-
-A spell checker for the Sinclair QL (QDOS) and Windows/Linux, with a
-Python prototype used as the reference implementation.
+A small CMD text editor for Windows, built on a `tui.h` console abstraction. Single binary, no installer, no dependencies beyond `dict.smd`.
 
 ## What it does
 
-Reads a text file, finds words that are not in the dictionary, shows the
-sentence with the unknown word in `[brackets]` (red on Windows/Linux), and
-offers up to 95 guesses in pages of 5. You can pick a guess, ignore the
-word, or type a replacement. The corrected file is written back.
+- Full-screen text editing in an 80×25 CMD window
+- Mark / cut / paste with an internal clipboard
+- Find, find & replace
+- Paragraph reflow to a chosen width (default 80, max 120), word-aware, skips indented blocks
+- In-process interactive spellchecker with suggestions
+- Spell-mark toggle: highlight misspellings in red on demand
+- Help screen (`F1`)
 
 ## Files
 
 | File | Purpose |
 |---|---|
-| `spell.c` | The C port. Builds for QDOS (QL), Windows, and Linux. |
-| `SC2.py` | The Python prototype. Reference behaviour. |
-| `make_smd3.py` | Encodes a plain word list into the `SMD3` dictionary format. |
-| `dict.smd` | The dictionary, ~88,873 words, ~390 KB. |
-| `dic.txt` | The plain word list the dictionary was built from. |
-| `bad.txt` | A test file with deliberate misspellings. |
+| `tiny.c` | The editor |
+| `tinyspell.c` / `.h` | Spell library — dictionary, lookup, suggestions, interactive UI |
+| `tui.h` | Console abstraction (`tui_*` functions) |
+| `tui_console.c` | Windows CMD backend |
+| `dict.smd` | The dictionary, ~88,873 words, ~497 KB |
 
-## Building the C version
-
-### Windows (Tiny C Compiler)
+## Building
 
 ```powershell
-C:\tcc\tcc.exe spell.c -o spell.exe
-.\spell.exe dict.smd bad.txt bad.txt
+tcc tiny.c tui_console.c tinyspell.c -luser32 -o tiny.exe
+```
 
-WHY IT'S LIGHT
---------------
+One binary. No `spell.exe`, no temp files, no `system()` calls (except `cls` at startup).
 
-The dictionary holds about 88,000 English words, but it is not stored as
-a list of words. It is front-coded: the words are sorted, and each word
-stores only the part that differs from the one before it. "AARDVARK" is
-followed by "AARDVARKS", which stores just "S" plus a note saying "reuse
-the first 8 letters". On average a word costs about 1.6 bytes instead of
-7, so 88,000 words fit in 390 KB instead of 3 MB.
+## Running
 
-The file also carries a small restart table: every 8th word is stored in
-full, so the program can jump into the middle of the dictionary and read
-forward at most 7 words to find what it is looking for. That is what
-makes lookups fast despite the compression.
+```
+tiny
+tiny myfile.txt
+```
 
+If `dict.smd` isn't found at startup, you're prompted for its path. If you skip, Tiny still works — spell features just report "Dictionary not loaded."
 
-HOW TO RUN
-----------
+## The keys
 
-  python3 SC2.py dict.smd mytext.txt mytext.txt
+| Key | Action |
+|---|---|
+| Arrows | Move cursor |
+| Shift+Left/Right | Word left / right |
+| Home / End | Line start / end |
+| PgUp / PgDn | Page up / down |
+| Enter | Split line |
+| Backspace | Delete char / merge up at col 0 |
+| Delete | Delete char / merge down at end |
+| F1 | Help screen |
+| F2 | Reflow paragraph (prompts for width, default 80, Esc cancels) |
+| F3 / Ctrl+S | Save |
+| F4 | Interactive spellcheck |
+| F5 | Toggle spell marks (red misspellings) |
+| Ctrl+O | Open file |
+| Ctrl+F | Find |
+| Ctrl+R | Find & replace all |
+| Ctrl+B | Mark block; end mark copies to clipboard |
+| Ctrl+X | Cut marked block |
+| Ctrl+P | Paste clipboard |
+| Ctrl+N | New file |
+| Esc | Cancel mark / prompt, else quit (prompts if modified) |
 
-On Windows:
+## Spellchecking
 
-  py SC2.py dict.smd mytext.txt mytext.txt
+**F4** runs the interactive spellchecker in-process. It flattens the buffer into a text string, walks each word, and for every unknown word shows the sentence with the word in `[brackets]`, plus up to 95 suggestions in pages of 5. You can pick a guess, ignore the word, type your own replacement (checked against the dictionary), or press `Esc` to quit and save. The buffer is updated in place — **no file is written to disk** until you press F3 / Ctrl+S.
 
-The last two arguments are input and output. Passing the same name twice
-edits the file in place. To keep the original, give a different output
-name.
+**F5** toggles red spell marks. It takes a snapshot of the document's misspellings and highlights them. **Any edit clears the marks** (the snapshot is stale) — press F5 again for a fresh snapshot.
 
+## Why it's light
 
-WHAT YOU SEE
-------------
+The dictionary holds about 88,000 English words, but it is not stored as a list. It is **front-coded**: words are sorted, and each word stores only the part that differs from the one before it. `AARDVARK` is followed by `AARDVARKS`, which stores just `S` plus a note saying "reuse the first 8 letters." On average a word costs about 1.6 bytes instead of 7, so 88,000 words fit in under 500 KB instead of several MB.
 
-For each unknown word:
+A small restart table stores every 8th word in full, so lookup can jump into the middle of the dictionary and read forward at most 7 words. That's what makes lookups fast despite the compression.
 
-  The QUICK brown [foks] jumps over teh lazy dog.
+## Limits
 
-    1. fobs
-    2. foes
-    3. fogs
-    4. fops
-    5. folks
-    6. more guesses (15 left)
-    7. ignore
-    8. replace
-    q. quit and save
-
-Type a number, press Enter.
-
-
-THE KEYS
---------
-
-  1-5    pick that guess
-  6      more guesses
-  7      ignore this word
-  8      type your own replacement (it is checked against the dictionary)
-  q      quit and save
-  Enter  cancel this menu, move to the next word
-
-The corrected text is saved after every change, so nothing is lost if
-you quit or the power goes out. The original file is only replaced when
-the program finishes cleanly.
-
-
-LIMITS
-------
-
-- Only A-Z letters are checked. Numbers and punctuation are left alone.
-- Names, places and technical terms are not in the dictionary; ignore
-  them or use option 8.
-- The five guesses are suggestions, not guarantees. Option 8 always
-  lets you type the right word.
+- Only A–Z letters are checked. Numbers and punctuation are left alone.
+- Names, places and technical terms are not in the dictionary — ignore them or type your own replacement (option 8 in the spell menu).
+- The five guesses are suggestions, not guarantees.
+- `MAXLINES 4096` / `MAXLINE 1024` — a document can be at most 4,096 lines, each up to 1,023 characters. Longer lines are truncated on load; extra lines beyond 4,096 are dropped.
+- `dict.smd` must be found at startup or spelled out when prompted.

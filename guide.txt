@@ -1,7 +1,7 @@
 ==============================================================================
  TINY - a tiny text editor for Windows CMD
 ------------------------------------------------------------------------------
- Build:  tcc tiny.c tui_console.c -luser32 -o tiny.exe
+ Build:  tcc tiny.c tui_console.c tinyspell.c -luser32 -o tiny.exe
  Run:    tiny.exe              (untitled buffer)
          tiny.exe notes.txt    (opens notes.txt if it exists, else creates it)
 ==============================================================================
@@ -24,18 +24,22 @@ EDITING
   Enter               split line at cursor
   Backspace           delete char left; at col 0, merge with line above
   Delete              delete char under cursor; at end of line, merge down
-  F2                  join current line with next line
+  F2                  reflow the paragraph at the cursor to a chosen
+                      width (default 80, max 120).  Word-aware; skips
+                      indented blocks (code).  Esc cancels the prompt.
 
 
 FILES
 ------------------------------------------------------------------------------
-  F3                  save.  If the buffer has no filename yet,
+  F3 / Ctrl+S         save.  If the buffer has no filename yet,
                       prompts for one (blue bar at the bottom).
-  
+
+  Ctrl+O              open a file by name (blue prompt bar).
+
   Ctrl+N              new file.  Prompts to save if modified, then asks
                       for a filename.  If the file exists it is opened;
                       if not, an empty file is created and opened.
-  
+
   Esc                 quit.  Prompts to save if modified.
 
 
@@ -56,7 +60,7 @@ MARKING A BLOCK  (copy / cut / paste)
                       (does not quit).
 
   Workflow for moving text:
-    1. Ctrl+B, move cursor to end of block, Ctrl+B  (block marked+ copied)
+    1. Ctrl+B, move cursor to end of block, Ctrl+B  (block marked+copied)
     2. Ctrl+X                                       (block deleted)
     3. move cursor to destination
     4. Ctrl+P                                       (block pasted)
@@ -74,23 +78,50 @@ FINDING TEXT
                       Empty input or Esc cancels.
                       Case-sensitive.
 
+  Ctrl+R              find and replace all.  Prompts for find, then
+                      replace.  Replaces every occurrence in the
+                      document.  Reports the count on the status bar.
+                      Case-sensitive.
+
 
 SPELL CHECK
 ------------------------------------------------------------------------------
-  F4                  saves the file, runs spell.exe, reloads the result.
-                      If the file was untitled, prompts for a name first.
+  F4                  interactive spellcheck.  Runs in-process; the
+                      dictionary is loaded once at startup, so no save
+                      is needed and no external program is launched.
 
-                      spell.exe must be in the same folder as tiny.exe
-                      (or on PATH).  The dictionary file is dict.smd.
+                      For each unknown word, the sentence is shown with
+                      the word in [brackets], plus up to 95 suggestions
+                      in pages of 5.  Keys:
+                        1-5      pick that guess
+                        6        more guesses (if any remain)
+                        7        ignore this word
+                        8        type your own replacement
+                        Esc      quit (keeps any fixes already made)
+                        Enter    cancel this menu, next word
 
-                      When spell.exe finishes, press any key to return
-                      to the editor with the corrections loaded.
-                      Press F3 to save the corrected text over the original.
+                      The buffer is updated in place.  Nothing is
+                      written to disk until you press F3 / Ctrl+S.
+
+  F5                  toggle spell marks.  Highlights misspellings in
+                      red throughout the document.  Pressing F5 again
+                      turns the marks off.  Any edit clears the marks
+                      (the snapshot is stale); press F5 for a fresh one.
+
+                      If dict.smd is not found at startup, you are
+                      prompted for its path.  If you skip, Tiny still
+                      runs - F4 and F5 just report "Dictionary not
+                      loaded".
+
+
+HELP
+------------------------------------------------------------------------------
+  F1                  full keymap screen.  Press any key to return.
 
 
 STATUS BAR  (bottom line)
 ------------------------------------------------------------------------------
-  notes  12:47+  w:1208  !!          F3 SAVE  F4 SPELL  ^F FIND ...
+  notes  12:47+  w:1208  !!          F1 HELP  F3 SAVE  F4 SPELL ...
 
    notes     file name (no path, no .txt extension)
    96:7      line:column of the cursor
@@ -112,6 +143,7 @@ LIMITS
   no undo
   no horizontal scrolling beyond 80 columns visible
   clipboard is internal to the editor (not the Windows clipboard)
+  spell marks are a snapshot: any edit clears them
 
 
 TIPS
@@ -121,8 +153,12 @@ TIPS
     create/open the other file, or rename at the command prompt.
   - To rename the current document, save with F3, quit with Esc,
     then rename from the command line with: ren old.txt new.txt
-  - F4 leaves a corrected copy in notes.txt.tmp briefly; the editor
-    loads it and removes it, so you always end up back in the editor.
+  - F4 no longer writes a temp file.  It works on the in-memory buffer,
+    so if you don't save, the disk copy is unchanged.
+  - F5 marks are a snapshot.  Fixing one typo clears all red marks;
+    press F5 again for an updated view.
+  - If dict.smd isn't next to tiny.exe, either put it there or type
+    its path when prompted at startup.
   - Terminal must be at least 80x25.  The editor resizes the buffer
     but not the window.  If CMD opens smaller than 80x25, maximise it
     before running tiny.exe.

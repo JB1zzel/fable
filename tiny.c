@@ -1,5 +1,5 @@
 /* tiny.c - tiny text editor for TCC / Windows CMD, built on tui.h
- * compile: tcc tiny.c tui_console.c -luser32 -o tiny.exe
+ * compile: tcc tiny.c tui_console.c tinyspell.c -luser32 -o tiny.exe
  *
  * Keys:
  *   Arrows          move cursor
@@ -9,15 +9,26 @@
  *   Enter           split line
  *   Backspace       delete char / merge up at col 0
  *   Delete          delete char / merge down at end
- *   F2              join with next line
- *   F3              save (prompts for name if untitled)
- *   F4              save, spellcheck, reload
+ *   F1              help screen
+ *   F2              reflow paragraph (prompts for width, default 80)
+ *   F3 / Ctrl+S     save (prompts for name if untitled)
+ *   F4              interactive spellcheck (in-process, no save)
+ *   F5              toggle spell marks (red misspellings)
+ *   Ctrl+O          open file
  *   Ctrl+B          mark block; when you end the mark it is copied to clipboard
  *   Ctrl+X          mark, cut (delete) the block, clipboard keeps it
  *   Ctrl+P          paste clipboard at cursor
  *   Ctrl+F          find text (prompts on the status bar)
+ *   Ctrl+R          find and replace all (prompts on the status bar)
  *   Ctrl+N          new document
  *   Esc             cancel mark / prompt (if any), else quit (prompt if modified)
+ *
+ * Spell marks (F5) are a snapshot: pressing F5 highlights misspellings,
+ * any edit clears them, F5 again takes a fresh snapshot.
+ *
+ * The dictionary (dict.smd) is loaded once at startup. If not found, you
+ * are prompted for its path; skipping it leaves Tiny usable without
+ * spellcheck.
  */
 
 #include <stdio.h>
@@ -25,6 +36,7 @@
 #include <string.h>
 #include <ctype.h>
 #include "tui.h"
+#include "tinyspell.h"
 
 #define MAXLINES 4096
 #define MAXLINE  1024
@@ -40,11 +52,78 @@ static int   top_line  = 0;
 static int   left_col  = 0;
 static int   modified;
 static char  filename[260];
-static char  dict_path[260] = "dict.smd";
-static char  tmp_path[264];
+static char dict_path[260] = "dict.smd";
+/*static char  dict_path[260] = "dict.smd";
+static char  tmp_path[264];*/
 
 static void insert_char(int c);
 static void split_line(void);
+
+/* ---------- spell marks (F5) ---------- */
+
+static int spell_marks_on = 0;
+static int spell_ok = 0;
+static unsigned char spell_bad[MAXLINES][MAXLINE / 8];
+
+static void spell_set(int line, int col) {
+    spell_bad[line][col / 8] |= (unsigned char)(1 << (col % 8));
+}
+static int spell_is_bad(int line, int col) {
+    return (spell_bad[line][col / 8] >> (col % 8)) & 1;
+}
+static void spell_clear_line(int line) {
+    if (line >= 0 && line < MAXLINES)
+        memset(spell_bad[line], 0, MAXLINE / 8);
+}
+
+static void spell_mark_line(int line)
+{
+    char *p;
+    int col = 0;
+
+    spell_clear_line(line);
+    if (!spell_ok || !spell_marks_on) return;
+    if (line < 0 || line >= nlines) return;
+
+    p = lines[line];
+    while (*p) {
+        char word[128], key[128];
+        int wlen = 0, start, j;
+
+        while (*p && !IS_WORD(*p)) { p++; col++; }
+        start = col;
+        while (*p && IS_WORD(*p) && wlen < 127) { word[wlen++] = *p; p++; col++; }
+        word[wlen] = '\0';
+        if (!wlen) continue;
+
+        for (j = 0; j < wlen; j++) key[j] = toupper((unsigned char)word[j]);
+        key[wlen] = '\0';
+
+        if (!ts_check(key)) {
+            for (j = start; j < start + wlen; j++)
+                spell_set(line, j);
+        }
+    }
+}
+
+static void spell_line_dirty(int line)
+{
+    spell_clear_line(line);
+    if (spell_marks_on && spell_ok) spell_mark_line(line);
+}
+
+static void spell_mark_all(void)
+{
+    int i;
+    memset(spell_bad, 0, sizeof(spell_bad));
+    for (i = 0; i < nlines; i++) spell_mark_line(i);
+}
+
+static void spell_marks_off(void)
+{
+    spell_marks_on = 0;
+    memset(spell_bad, 0, sizeof(spell_bad));
+}
 
 /* ---------- mark + clipboard ---------- */
 
@@ -170,6 +249,7 @@ static void delete_mark(void)
         cur_col  = keep_first;
     }
     modified = 1;
+    spell_marks_off();
 }
 
 static void paste_clip(void)
@@ -180,6 +260,7 @@ static void paste_clip(void)
         else                  insert_char((unsigned char)clip[i]);
     }
     modified = 1;
+    spell_marks_off();
 }
 
 /* ---------- find ---------- */
@@ -212,6 +293,318 @@ static int find_next(const char *needle)
     return 0;
 }
 
+/* ---------- find and replace all ---------- */
+
+typedef struct {
+    const char *needle;
+    const char *replacement;
+    int         case_sensitive;
+} FindSpec;
+
+static int replace_all(const FindSpec *spec)
+{
+    int nlen, rlen, count = 0;
+    int l;
+    int replaced_any = 0;
+
+    if (!spec || !spec->needle || !spec->needle[0]) return 0;
+    if (strchr(spec->needle, '\n')) return 0;
+
+    nlen = (int)strlen(spec->needle);
+    rlen = (int)strlen(spec->replacement);
+
+    for (l = 0; l < nlines; l++) {
+        char out[MAXLINE];
+        int outlen = 0;
+        int pos = 0;
+        int linelen = (int)strlen(lines[l]);
+        int line_changed = 0;
+
+        while (pos < linelen) {
+            int match = -1;
+            int k;
+
+            for (k = pos; k + nlen <= linelen; k++) {
+                int ok;
+                if (spec->case_sensitive) {
+                    ok = memcmp(&lines[l][k], spec->needle, (size_t)nlen) == 0;
+                } else {
+                    int j;
+                    ok = 1;
+                    for (j = 0; j < nlen; j++) {
+                        if (tolower((unsigned char)lines[l][k + j]) !=
+                            tolower((unsigned char)spec->needle[j])) {
+                            ok = 0;
+                            break;
+                        }
+                    }
+                }
+                if (ok) { match = k; break; }
+            }
+
+            if (match < 0) {
+                int rest = linelen - pos;
+                if (outlen + rest > MAXLINE - 1) rest = MAXLINE - 1 - outlen;
+                if (rest > 0) {
+                    memcpy(out + outlen, &lines[l][pos], (size_t)rest);
+                    outlen += rest;
+                }
+                break;
+            }
+
+            {
+                int pre = match - pos;
+                if (outlen + pre > MAXLINE - 1) pre = MAXLINE - 1 - outlen;
+                if (pre > 0) {
+                    memcpy(out + outlen, &lines[l][pos], (size_t)pre);
+                    outlen += pre;
+                }
+            }
+
+            {
+                int rep = rlen;
+                if (outlen + rep > MAXLINE - 1) rep = MAXLINE - 1 - outlen;
+                if (rep > 0) {
+                    memcpy(out + outlen, spec->replacement, (size_t)rep);
+                    outlen += rep;
+                }
+            }
+
+            count++;
+            line_changed = 1;
+            pos = match + nlen;
+        }
+
+        if (line_changed) {
+            out[outlen] = '\0';
+            memcpy(lines[l], out, (size_t)(outlen + 1));
+            replaced_any = 1;
+        }
+    }
+
+    if (replaced_any) {
+        modified = 1;
+        if (cur_line >= nlines) cur_line = nlines - 1;
+        if (cur_line < 0) cur_line = 0;
+        {
+            int len = (int)strlen(lines[cur_line]);
+            if (cur_col > len) cur_col = len;
+        }
+        spell_marks_off();
+    }
+
+    return count;
+}
+
+/* ---------- reflow ---------- */
+
+static void reflow(int width)
+{
+    int pstart, pend, i, j;
+    char para[MAXLINE];
+    char out[MAXLINE];
+    int  plen, pos, outcount;
+    int  indent;
+    int  changed = 0;
+
+    if (width < 10)  width = 10;
+    if (width > 120) width = 120;
+
+    /* nothing to do on an empty line */
+    if (lines[cur_line][0] == '\0') return;
+
+    /* indented block: treat as preformatted, don't touch */
+    if (lines[cur_line][0] == ' ' || lines[cur_line][0] == '\t') return;
+
+    /* find paragraph bounds around the cursor */
+    pstart = cur_line;
+    pend   = cur_line;
+    while (pstart > 0 && lines[pstart - 1][0] != '\0') pstart--;
+    while (pend < nlines - 1 && lines[pend + 1][0] != '\0') pend++;
+
+    /* preserve leading indent of the first line (if any — we already
+       skipped fully-indented paragraphs, so this is usually 0) */
+    indent = 0;
+    while (lines[pstart][indent] == ' ' && indent < MAXLINE - 1) indent++;
+
+    /* join paragraph lines into para[], collapsing leading whitespace
+       on continuation lines but preserving mid-line spacing */
+    plen = 0;
+    for (i = pstart; i <= pend; i++) {
+        const char *s = lines[i];
+        int at_line_start = 1;
+        while (*s) {
+            if (*s == ' ' || *s == '\t') {
+                if (at_line_start) { s++; continue; }          /* drop leading */
+                if (plen > 0 && para[plen - 1] != ' ' && plen < MAXLINE - 1)
+                    para[plen++] = ' ';
+                s++;
+            } else {
+                if (plen < MAXLINE - 1) para[plen++] = *s;
+                at_line_start = 0;
+                s++;
+            }
+        }
+        /* single space between joined lines */
+        if (i < pend && plen > 0 && para[plen - 1] != ' ' && plen < MAXLINE - 1)
+            para[plen++] = ' ';
+    }
+    while (plen > 0 && para[plen - 1] == ' ') plen--;
+    para[plen] = '\0';
+
+    if (plen == 0) return;
+
+    /* count wrapped lines first (so we can splice correctly) */
+    outcount = 0;
+    pos = 0;
+    while (pos < plen) {
+        int avail = width - indent;
+        int len;
+        if (avail < 10) avail = 10;
+
+        len = plen - pos;
+        if (len > avail) {
+            int brk = avail;
+            while (brk > 0 && para[pos + brk] != ' ') brk--;
+            if (brk > 0) len = brk;      /* break at word boundary */
+            /* else: single word longer than width — hard-break at avail */
+        }
+        outcount++;
+        pos += len;
+        if (pos < plen && para[pos] == ' ') pos++;
+    }
+
+    /* splice: grow or shrink lines[] as needed */
+    {
+        int old_count = pend - pstart + 1;
+        int diff = outcount - old_count;
+        int tail;
+
+        if (diff > 0) {
+            if (nlines + diff > MAXLINES) return;    /* won't fit — abort */
+            tail = nlines - pend - 1;
+            for (j = 0; j < tail; j++)
+                memcpy(lines[nlines + diff - 1 - j],
+                       lines[nlines - 1 - j], MAXLINE);
+            nlines += diff;
+        } else if (diff < 0) {
+            tail = nlines - pend - 1;
+            for (j = 0; j < tail; j++)
+                memcpy(lines[pend + 1 + diff + j],
+                       lines[pend + 1 + j], MAXLINE);
+            nlines += diff;
+        }
+    }
+
+    /* write wrapped lines directly into lines[pstart..] */
+    {
+        int out_line = pstart;
+        pos = 0;
+        while (pos < plen) {
+            int avail = width - indent;
+            int len, k;
+            if (avail < 10) avail = 10;
+
+            len = plen - pos;
+            if (len > avail) {
+                int brk = avail;
+                while (brk > 0 && para[pos + brk] != ' ') brk--;
+                if (brk > 0) len = brk;
+            }
+
+            /* compare before overwriting — only mark changed if different */
+            {
+                char old[MAXLINE];
+                int oldlen = (int)strlen(lines[out_line]);
+                int newlen = indent + len;
+                if (newlen > MAXLINE - 1) newlen = MAXLINE - 1;
+                if (oldlen > MAXLINE - 1) oldlen = MAXLINE - 1;
+                memcpy(old, lines[out_line], (size_t)(oldlen + 1));
+
+                for (k = 0; k < indent && k < newlen; k++) out[k] = ' ';
+                memcpy(out + k, para + pos, (size_t)(newlen - k));
+                out[newlen] = '\0';
+
+                if (strcmp(old, out) != 0) changed = 1;
+            }
+
+            memcpy(lines[out_line], out, strlen(out) + 1);
+            out_line++;
+            pos += len;
+            if (pos < plen && para[pos] == ' ') pos++;
+        }
+    }
+
+    if (changed) modified = 1;
+
+    /* clamp cursor — its old column may no longer exist */
+    if (cur_line >= nlines) cur_line = nlines - 1;
+    if (cur_line < 0) cur_line = 0;
+    {
+        int len = (int)strlen(lines[cur_line]);
+        if (cur_col > len) cur_col = len;
+        if (cur_col < 0) cur_col = 0;
+    }
+    spell_marks_off(); 
+}
+static void help_screen(void)
+{
+    tui_clear();
+    tui_color(TUI_WHITE, TUI_BLACK);
+
+    tui_gotoxy(1, 1);
+    tui_puts("FABLE - Jamie Bradbury 2026");
+    tui_gotoxy(1, 3);
+    tui_puts("  Arrows        move cursor");
+    tui_gotoxy(1, 4);
+    tui_puts("  Shift+Arrows  word left / right");
+    tui_gotoxy(1, 5);
+    tui_puts("  Home / End    line start / end");
+    tui_gotoxy(1, 6);
+    tui_puts("  PgUp / PgDn   page up / down");
+    tui_gotoxy(1, 8);
+    tui_puts("  Enter         split line");
+    tui_gotoxy(1, 9);
+    tui_puts("  Backspace     delete char / merge up");
+    tui_gotoxy(1, 10);
+    tui_puts("  Delete        delete char / merge down");
+    tui_gotoxy(1, 12);
+    tui_puts("  F1            this help");
+    tui_gotoxy(1, 13);
+    tui_puts("  F2            reflow paragraph");
+    tui_gotoxy(1, 14);
+    tui_puts("  F3 / Ctrl+S   save");
+    tui_gotoxy(1, 15);
+    tui_puts("  F4            spellcheck");
+    tui_gotoxy(1, 16);
+    tui_puts("  F5            highlight spelling in document");
+    tui_gotoxy(1, 18); 
+    tui_puts("  Ctrl+F        find");
+    tui_gotoxy(1, 19);
+    tui_puts("  Ctrl+R        find & replace");
+    tui_gotoxy(1, 20);
+    tui_puts("  Ctrl+B/X/P    mark / cut / paste");
+    tui_gotoxy(1, 21);
+    tui_puts("  Ctrl+N/O      new file / Open");
+    tui_gotoxy(1, 22);
+   /* tui_puts("  Ctrl+D        diary");*/
+    tui_gotoxy(1, 23);
+    tui_puts("  Esc           quit (prompts if modified)");
+
+    tui_gotoxy(1, SCRH + 1);
+    tui_color(TUI_BLACK, TUI_LGRAY);
+    {
+        char buf[SCRW + 1];
+        int i;
+        snprintf(buf, sizeof buf, " F1 HELP  F2 REFLOW  F3 SAVE  ESC EXIT");
+        for (i = (int)strlen(buf); i < SCRW; i++) buf[i] = ' ';
+        buf[SCRW] = '\0';
+        tui_puts(buf);
+    }
+    tui_color(TUI_LGRAY, TUI_BLACK);
+
+    tui_getch();          /* any key returns */
+}
 /* ---------- file io ---------- */
 
 static void load_file(const char *fn)
@@ -327,13 +720,10 @@ static void put_status(void)
     memcpy(shown, base, (size_t)n);
     shown[n] = '\0';
 
-    if (mark_active) {
-        hint = "^B END MARK  ESC CANCEL ";
-    } else if (mark_exists) {
-        hint = "^P PASTE  ^X CUT  ESC CLEAR ";
-    } else {
-        hint = "F3 SAVE  F4 SPELL  ^F FIND  ^N NEW  ESC EXIT ";
-    }
+    /* contextual hint — short, mode-aware */
+    if (mark_active)       hint = "^B END  ESC CANCEL";
+    else if (mark_exists)  hint = "^P PASTE  ^X CUT  ESC CLEAR";
+    else                   hint = "F1 HELP  F3 SAVE  F4 SPELL  ESC EXIT";
 
     snprintf(left, sizeof left, " %s  %d:%d%s  w:%d%s",
              shown,
@@ -363,7 +753,6 @@ static void put_status(void)
     }
     tui_color(TUI_LGRAY, TUI_BLACK);
 }
-
 /* ---------- render ---------- */
 
 static void render(void)
@@ -394,10 +783,13 @@ static void render(void)
                 int prev_color = 0;
                 for (k = 0; k < lim; k++) {
                     int src_col = left_col + k;
-                    int col_id = in_mark(ln, src_col) ? 1 : 0;
+                    int col_id = 0;
+                    if (in_mark(ln, src_col))                             col_id = 1;
+                    else if (spell_marks_on && spell_is_bad(ln, src_col)) col_id = 2;
                     if (col_id != prev_color) {
-                        if (col_id == 1) tui_color(TUI_BLACK, TUI_LCYAN);
-                        else             tui_color(TUI_LGRAY, TUI_BLACK);
+                        if (col_id == 1)      tui_color(TUI_BLACK, TUI_LCYAN);
+                        else if (col_id == 2) tui_color(TUI_LRED, TUI_BLACK);
+                        else                  tui_color(TUI_LGRAY, TUI_BLACK);
                         prev_color = col_id;
                     }
                     tui_putc(lines[ln][src_col]);
@@ -463,6 +855,7 @@ static void insert_char(int c)
     lines[cur_line][cur_col] = (char)c;
     cur_col++;
     modified = 1;
+    spell_marks_off();
 }
 
 static void split_line(void)
@@ -486,6 +879,7 @@ static void split_line(void)
     cur_line++;
     cur_col = 0;
     modified = 1;
+    spell_marks_off();
 }
 
 static void join(int a, int b)
@@ -503,6 +897,7 @@ static void join(int a, int b)
     cur_line = a;
     cur_col  = alen;
     modified = 1;
+    spell_marks_off();
 }
 
 static void del_back(void)
@@ -517,6 +912,7 @@ static void del_back(void)
     } else if (cur_line > 0) {
         join(cur_line - 1, cur_line);
     }
+    spell_marks_off();
 }
 
 static void del_forward(void)
@@ -530,6 +926,7 @@ static void del_forward(void)
     } else if (cur_line < nlines - 1) {
         join(cur_line, cur_line + 1);
     }
+    spell_marks_off();
 }
 
 /* ---------- input ---------- */
@@ -573,7 +970,7 @@ static void move_arrow(int code)
     }
 }
 
-static void prompt_line(const char *prompt, char *dest, int maxlen)
+static int prompt_line(const char *prompt, char *dest, int maxlen)
 {
     int len = 0, c;
     tui_puts(prompt);
@@ -585,13 +982,14 @@ static void prompt_line(const char *prompt, char *dest, int maxlen)
             if (len > 0) { len--; tui_putc('\b'); tui_putc(' '); tui_putc('\b'); }
             continue;
         }
-        if (c == 27) { dest[0] = '\0'; return; }
+        if (c == 27) { dest[0] = '\0'; return -1; }
         if (c >= 32 && c < 127 && len < maxlen - 1) {
             dest[len++] = (char)c;
             tui_putc(c);
         }
     }
     dest[len] = '\0';
+    return 0;
 }
 
 /* ---------- save with name prompt (if untitled) ---------- */
@@ -662,54 +1060,91 @@ static void new_document(void)
 
 /* ---------- F4: save, spellcheck, reload ---------- */
 
-static int spell_and_reload(void)
+static int spell_buffer(void)
 {
+    int i, n = 0;
+    for (i = 0; i < nlines; i++) {
+        char *p = lines[i];
+        while (*p) {
+            char word[128], key[128];
+            int wlen = 0, k;
+            while (*p && !IS_WORD(*p)) p++;
+            while (*p &&  IS_WORD(*p) && wlen < 127) word[wlen++] = *p++;
+            word[wlen] = '\0';
+            if (!wlen) continue;
+            for (k = 0; k < wlen; k++)
+                key[k] = toupper((unsigned char)word[k]);
+            key[wlen] = '\0';
+            if (!ts_check(key)) n++;
+        }
+    }
+    return n;
+}
+
+static void spell_check(void)
+{
+    char *text;
+    int total = 0, len, fixes, i, off;
+
     clear_mark();
 
-    if (!filename[0]) {
-        if (!save_current()) {
-            status_msg("Need a filename to spellcheck.");
-            tui_getch();
-            return 0;
-        }
-    }
-    if (!save_file()) {
-        status_msg("Save failed.");
+    if (!spell_ok) {
+        status_msg("Dictionary not loaded.");
         tui_getch();
-        return 0;
+        return;
     }
 
-    snprintf(tmp_path, sizeof tmp_path, "%s.tmp", filename);
+    for (i = 0; i < nlines; i++) total += (int)strlen(lines[i]) + 1;
+    text = (char *)malloc((size_t)total + 1);
+    if (!text) { status_msg("Out of memory."); tui_getch(); return; }
 
-    tui_restore();
-    tui_clear();
-
-    {
-        char cmd[800];
-        snprintf(cmd, sizeof cmd, "spell.exe \"%s\" \"%s\" \"%s\"",
-                 dict_path, filename, tmp_path);
-        system(cmd);
+    off = 0;
+    for (i = 0; i < nlines; i++) {
+        int l = (int)strlen(lines[i]);
+        memcpy(text + off, lines[i], (size_t)l);
+        off += l;
+        text[off++] = '\n';
     }
+    text[off] = '\0';
+    len = off;
 
-    tui_init();
     tui_clear();
+    fixes = ts_fix_interactive(&text, &len);
 
+    /* rebuild lines[] from text */
+    nlines = 0;
     {
-        FILE *probe = fopen(tmp_path, "rb");
-        if (probe) {
-            fclose(probe);
-            load_file(tmp_path);
-            remove(tmp_path);
-        } else {
-            load_file(filename);
+        int start = 0, k;
+        for (k = 0; k <= len; k++) {
+            if (k == len || text[k] == '\n') {
+                int l = k - start;
+                if (l > MAXLINE - 1) l = MAXLINE - 1;
+                memcpy(lines[nlines], text + start, (size_t)l);
+                lines[nlines][l] = '\0';
+                nlines++;
+                if (nlines >= MAXLINES) break;
+                start = k + 1;
+            }
         }
+        if (nlines == 0) { lines[0][0] = '\0'; nlines = 1; }
     }
+
+    free(text);
+
+    if (fixes > 0) modified = 1;
+
+    {
+        char msg[64];
+        snprintf(msg, sizeof msg, "%d fix%s", fixes, fixes == 1 ? "" : "es");
+        status_msg(msg);
+    }
+
+    if (cur_line >= nlines) cur_line = nlines - 1;
+    if (cur_line < 0) cur_line = 0;
+    clamp_col();
     top_line = 0;
     left_col = 0;
-    cur_line = 0;
-    cur_col  = 0;
-    modified = 0;
-    return 1;
+    spell_marks_off(); 
 }
 
 /* ---------- main ---------- */
@@ -718,32 +1153,83 @@ int main(int argc, char **argv)
 {
     int ch;
 
+    system("cls");
+    tui_init();
+    tui_clear();
+
     if (argc > 1) {
         strncpy(filename, argv[1], sizeof(filename) - 1);
         filename[sizeof(filename) - 1] = '\0';
     }
 
-    tui_init();
     tui_clear();
 
     lines[0][0] = '\0';
     nlines = 1;
     if (filename[0]) load_file(filename);
+    
+    if (ts_init(dict_path)) {
+        spell_ok = 1;
+    } else {
+        char path[260];
+        path[0] = '\0';
+        prompt_bar("Dictionary not found. Path [skip]: ");
+        if (prompt_line("", path, sizeof path) >= 0 && path[0]) {
+            strncpy(dict_path, path, sizeof(dict_path) - 1);
+            dict_path[sizeof(dict_path) - 1] = '\0';
+            if (ts_init(dict_path)) spell_ok = 1;
+        }
+        tui_color(TUI_LGRAY, TUI_BLACK);
+        tui_clear();
+    }
 
     for (;;) {
         render();
         ch = tui_getch();
         if (ch == 0 || ch == 224) {
             int code = tui_getch();
-            if (code == 60) {
+            if (code == 59) {          /* F1 */
                 clear_mark();
-                if (cur_line < nlines - 1) join(cur_line, cur_line + 1);
-            } else if (code == 61) {
+                help_screen();
+            } else if (code == 60) {                     /* F2: reflow */
+                char buf[16];
+                int width = 80;
+                buf[0] = '\0';
+                prompt_bar("Width [80]: ");
+                if (prompt_line("", buf, sizeof buf) < 0) {
+                    tui_color(TUI_LGRAY, TUI_BLACK);
+                    continue;                            /* Esc cancels */
+                }
+                tui_color(TUI_LGRAY, TUI_BLACK);
+                if (buf[0]) width = atoi(buf);
+                if (width < 20)  width = 20;
+                if (width > 120) width = 120;
+                clear_mark();
+                reflow(width);
+            } else if (code == 61) {              /* F3 */
                 clear_mark();
                 save_current();
-            } else if (code == 62) {
-                spell_and_reload();
-            } else if (code == 83) {
+            } else if (code == 62) {              /* F4 */
+                spell_check();
+            } else if (code == 63) {              /* F5: toggle spell marks */
+                clear_mark();
+                if (spell_marks_on) {
+                    spell_marks_on = 0;
+                    status_msg("Spell marks off.");
+                } else {
+                    if (!spell_ok) {
+                        if (!ts_init(dict_path)) {
+                            status_msg("Dictionary not found.");
+                            tui_getch();
+                            continue;
+                        }
+                        spell_ok = 1;
+                    }
+                    spell_marks_on = 1;
+                    spell_mark_all();
+                    status_msg("Spell marks on.");
+                }
+            } else if (code == 83) {              /* Delete */
                 clear_mark();
                 del_forward();
             } else {
@@ -751,7 +1237,21 @@ int main(int argc, char **argv)
             }
             continue;
         }
-        switch (ch) {
+        switch (ch) {      
+        case 19:                                  /* Ctrl+S: save */
+            clear_mark();
+            save_current();
+            break;
+        case 15:                                  /* Ctrl+O: open */
+            {
+                char path[260];
+                path[0] = '\0';
+                prompt_bar("Open: ");
+                if (prompt_line("", path, sizeof path) >= 0 && path[0])
+                    load_file(path);
+                tui_color(TUI_LGRAY, TUI_BLACK);
+            }
+            break;
         case 2:                                   /* Ctrl+B */
             if (mark_active) {
                 mark.el = cur_line;
@@ -790,6 +1290,39 @@ int main(int argc, char **argv)
                 if (needle[0]) find_next(needle);
             }
             break;
+        case 18:                                  /* Ctrl+R: find and replace all */
+            {
+                char find_buf[128];
+                char replace_buf[128];
+                FindSpec spec;
+                int n;
+
+                find_buf[0] = '\0';
+                prompt_bar("Find: ");
+                prompt_line("", find_buf, sizeof find_buf);
+                tui_color(TUI_LGRAY, TUI_BLACK);
+                if (!find_buf[0]) break;
+
+                replace_buf[0] = '\0';
+                prompt_bar("Replace with: ");
+                prompt_line("", replace_buf, sizeof replace_buf);
+                tui_color(TUI_LGRAY, TUI_BLACK);
+
+                spec.needle = find_buf;
+                spec.replacement = replace_buf;
+                spec.case_sensitive = 1;
+                n = replace_all(&spec);
+
+                {
+                    char msg[64];
+                    snprintf(msg, sizeof msg, "%d replacement%s", n, n == 1 ? "" : "s");
+                    prompt_bar(msg);
+                    tui_getch();
+                    tui_color(TUI_LGRAY, TUI_BLACK);
+                }
+                clear_mark();
+            }
+            break;
         case 14:                                  /* Ctrl+N */
             new_document();
             break;
@@ -808,6 +1341,7 @@ int main(int argc, char **argv)
             tui_cursor(1, 0);
             tui_clear();
             tui_restore();
+            ts_free();
             tui_gotoxy(1, 1);
             return 0;
         case 13:

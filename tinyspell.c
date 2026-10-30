@@ -1,23 +1,19 @@
-/* spell.c - spell checker for the Z88-like suite, built on tui.h
- * compile: tcc spell.c tui_console.c -luser32 -o spell.exe
- *
- * usage: spell dict.smd input.txt output.txt
+/* tinyspell.c - lightweight spell checker library
+ * compile as part of tiny.exe:  tcc tiny.c tui_console.c tinyspell.c ...
+ * compile as part of spell.exe: tcc spell.c tui_console.c tinyspell.c ...
  */
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
-#include "tui.h"
+#include "tinyspell.h"
 
 #define RESTART      8
 #define MAX_GUESSES  95
-#define PAGE_SIZE    5
 #define EDIT_CAP     5
-#define MAX_WORD     128
 #define SCRATCH_CAP  4096
-#define SCRW         80
-#define SCRH         24
+#define MAX_WORD     TS_MAX_WORD
 
 /* ---------- little-endian helpers ---------- */
 static unsigned long rd32(const unsigned char *p) {
@@ -25,31 +21,44 @@ static unsigned long rd32(const unsigned char *p) {
            ((unsigned long)p[2] << 16) | ((unsigned long)p[3] << 24);
 }
 
-/* ---------- dictionary ---------- */
+/* ---------- dictionary state ---------- */
 static unsigned char *dict = NULL;
 static unsigned long  dict_len = 0;
 static unsigned long  word_count, restart_count, restart_off, data_off;
 
-static int load_dict(const char *path) {
-    FILE *f = fopen(path, "rb");
+int ts_init(const char *path)
+{
+    FILE *f;
     long  n;
+
+    ts_free();
+    f = fopen(path, "rb");
     if (!f) return 0;
     fseek(f, 0, SEEK_END); n = ftell(f); fseek(f, 0, SEEK_SET);
     if (n < 0x20) { fclose(f); return 0; }
     dict = (unsigned char *)malloc((size_t)n);
     if (!dict) { fclose(f); return 0; }
-    if (fread(dict, 1, (size_t)n, f) != (size_t)n) { fclose(f); return 0; }
+    if (fread(dict, 1, (size_t)n, f) != (size_t)n) { fclose(f); free(dict); dict = NULL; return 0; }
     fclose(f);
-    if (memcmp(dict, "SMD3", 4) != 0) return 0;
+    if (memcmp(dict, "SMD3", 4) != 0) { free(dict); dict = NULL; return 0; }
     dict_len      = (unsigned long)n;
     word_count    = rd32(dict + 0x04);
     restart_count = rd32(dict + 0x08);
     restart_off   = rd32(dict + 0x0C);
     data_off      = rd32(dict + 0x10);
-    if (restart_off >= dict_len || data_off >= dict_len) return 0;
+    if (restart_off >= dict_len || data_off >= dict_len) {
+        free(dict); dict = NULL; return 0;
+    }
     return 1;
 }
 
+void ts_free(void)
+{
+    if (dict) { free(dict); dict = NULL; }
+    dict_len = word_count = restart_count = restart_off = data_off = 0;
+}
+
+/* ---------- decode helpers ---------- */
 static void decode_restart(unsigned long r, char *out) {
     unsigned long o, base;
     unsigned char slen;
@@ -80,12 +89,16 @@ static void decode_next(unsigned long *po, const char *prev, char *out) {
     *po = o + 2 + slen;
 }
 
-static int dict_lookup(const char *key) {
+/* ---------- lookup ---------- */
+int ts_check(const char *key)
+{
     long lo = 0, hi = (long)restart_count - 1, mid;
     char buf[MAX_WORD], prev[MAX_WORD];
     unsigned long o;
     int i;
-    if (restart_count == 0) return 0;
+
+    if (!dict || restart_count == 0 || !key || !key[0]) return 0;
+
     while (lo < hi) {
         mid = (lo + hi + 1) / 2;
         decode_restart((unsigned long)mid, buf);
@@ -109,10 +122,13 @@ static int edit_distance(const char *a, const char *b, int cap) {
     int la = (int)strlen(a), lb = (int)strlen(b);
     int i, j, cost, row_min, result;
     int *p, *c, *p2, *t;
+
     if (la > MAX_WORD || lb > MAX_WORD) return cap + 1;
     if (abs(la - lb) > cap) return cap + 1;
+
     for (j = 0; j <= lb; j++) prev[j] = j;
     p2 = prev2; p = prev; c = cur;
+
     for (i = 1; i <= la; i++) {
         c[0] = i; row_min = i;
         for (j = 1; j <= lb; j++) {
@@ -132,7 +148,7 @@ static int edit_distance(const char *a, const char *b, int cap) {
     return result;
 }
 
-/* ---------- guesses ---------- */
+/* ---------- suggestions ---------- */
 static int common_prefix(const char *a, const char *b) {
     int n = 0;
     while (a[n] && b[n] && a[n] == b[n]) n++;
@@ -153,17 +169,23 @@ static int cmp_cand(const void *x, const void *y) {
     return strcmp(a->word, b->word);
 }
 
-static int make_guesses(const char *key, char out[][MAX_WORD], int max) {
+int ts_suggest(const char *key, char out[][TS_MAX_WORD], int max)
+{
     unsigned long r, o;
     char buf[MAX_WORD], prev[MAX_WORD];
     int i, n = 0, k;
-    int klen = (int)strlen(key);
-    int lo = klen - 2, hi = klen + 2;
+    int klen;
+    int lo, hi;
     Cand *c;
+
+    if (!dict || !key || !key[0] || max <= 0) return 0;
+    klen = (int)strlen(key);
+    lo = klen - 2; hi = klen + 2;
     if (lo < 1) lo = 1;
-    if (klen == 0) return 0;
+
     c = (Cand *)malloc(sizeof(Cand) * SCRATCH_CAP);
     if (!c) return 0;
+
     for (r = 0; r < restart_count && n < SCRATCH_CAP; r++) {
         if (restart_off + 4*r + 4 > dict_len) break;
         o = rd32(dict + restart_off + 4*r);
@@ -190,6 +212,20 @@ static int make_guesses(const char *key, char out[][MAX_WORD], int max) {
     free(c);
     return (n < max) ? n : max;
 }
+/* ============================================================
+ * Layer 2: interactive UI
+ * ============================================================ */
+
+#include "tui.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <ctype.h>
+
+#define PAGE_SIZE   5
+#define MAX_GUESSES 95
+#define SCRW        80
+#define SCRH        24
 
 /* ---------- case ---------- */
 static void match_case(const char *tmpl, const char *word, char *out) {
@@ -241,46 +277,39 @@ static int read_line_at(int x, int y, char *buf, int n)
     for (;;) {
         c = tui_getch();
         if (c == -1) break;
+        if (c == 27) { buf[0] = 0; return -1; }
         if (c == '\n' || c == '\r') break;
         if (c == 8 || c == 127) {
             if (i > 0) {
                 i--;
-                tui_putc('\b');
-                tui_putc(' ');
-                tui_putc('\b');
+                tui_putc('\b'); tui_putc(' '); tui_putc('\b');
             }
             continue;
         }
-        if (i < n - 1) {
-            buf[i++] = (char)c;
-            tui_putc(c);
-        }
+        if (i < n - 1) { buf[i++] = (char)c; tui_putc(c); }
     }
     buf[i] = 0;
     return i;
 }
 
-/* ---------- sentence display (clipped to SCRW) ---------- */
+/* ---------- sentence display ---------- */
 static void print_sentence(const char *text, int sbeg, int wstart, int wlen, int send) {
     int k;
-    for (k = sbeg; k < wstart && k - sbeg < SCRW; k++)
-        tui_putc(text[k]);
+    for (k = sbeg; k < wstart && k - sbeg < SCRW; k++) tui_putc(text[k]);
     if (k - sbeg >= SCRW) return;
     tui_color(TUI_LRED, TUI_BLACK);
     tui_putc('[');
-    for (; k < wstart + wlen && k - sbeg < SCRW - 1; k++)
-        tui_putc(text[k]);
+    for (; k < wstart + wlen && k - sbeg < SCRW - 1; k++) tui_putc(text[k]);
     tui_putc(']');
     tui_color(TUI_LGRAY, TUI_BLACK);
-    for (; k < send && k - sbeg < SCRW; k++)
-        tui_putc(text[k]);
+    for (; k < send && k - sbeg < SCRW; k++) tui_putc(text[k]);
 }
 
-/* ---------- menu (full-screen redraw) ---------- */
+/* ---------- menu ---------- */
 static int prompt_choice(const char *word,
                          const char *text, int sbeg, int wstart, int wlen, int send,
                          int use_colour,
-                         char gs[][MAX_WORD], int ng) {
+                         char gs[][TS_MAX_WORD], int ng) {
     int page = 0;
     for (;;) {
         int start = page * PAGE_SIZE, end = start + PAGE_SIZE;
@@ -292,15 +321,14 @@ static int prompt_choice(const char *word,
         tui_clear();
 
         tui_gotoxy(1, 1);
-        if (use_colour) {
-            print_sentence(text, sbeg, wstart, wlen, send);
-        } else {
+        if (use_colour) print_sentence(text, sbeg, wstart, wlen, send);
+        else {
             int k;
             for (k = 0; text[k] && k < SCRW; k++) tui_putc(text[k]);
         }
 
         for (i = start; i < end; i++) {
-            char m[MAX_WORD];
+            char m[TS_MAX_WORD];
             char row[SCRW + 1];
             match_case(word, gs[i], m);
             snprintf(row, sizeof row, "   %d. %s", i - start + 1, m);
@@ -313,13 +341,11 @@ static int prompt_choice(const char *word,
             if (end < ng) {
                 char more[64];
                 snprintf(more, sizeof more, "   6. more guesses (%d left)", ng - end);
-                tui_gotoxy(1, row);
-                tui_puts(more);
-                row++;
+                tui_gotoxy(1, row); tui_puts(more); row++;
             }
             tui_gotoxy(1, row);     tui_puts("   7. ignore");
             tui_gotoxy(1, row + 1); tui_puts("   8. replace");
-            tui_gotoxy(1, row + 2); tui_puts("   q. quit and save");
+            tui_gotoxy(1, row + 2); tui_puts("   ESC to quit");
         }
 
         tui_gotoxy(1, SCRH);
@@ -327,11 +353,15 @@ static int prompt_choice(const char *word,
         tui_puts("choose: ");
         tui_color(TUI_LGRAY, TUI_BLACK);
 
-        if (read_line_at(9, SCRH, line, sizeof line) == 0) return 0;
+        {
+        int r = read_line_at(9, SCRH, line, sizeof line);
+        if (r < 0) return -1;      /* Esc = quit */
+        if (r == 0) return 0;      /* empty Enter = ignore */
+        }
 
         {
             int c = (unsigned char)line[0];
-            if (c == 'q' || c == 'Q') return -1;
+          /*  if (c == 'q' || c == 'Q') return -1;*/
             if (c == 27) return 0;
             if (c >= '1' && c <= '5') {
                 int n = c - '1';
@@ -344,30 +374,27 @@ static int prompt_choice(const char *word,
     }
 }
 
-/* ---------- replacement prompt (full-screen redraw) ---------- */
-static int ask_replacement(const char *original, char out[MAX_WORD]) {
-    char line[MAX_WORD];
-    char key[MAX_WORD];
+/* ---------- replacement prompt ---------- */
+static int ask_replacement(const char *original, char out[TS_MAX_WORD]) {
+    char line[TS_MAX_WORD];
+    char key[TS_MAX_WORD];
     for (;;) {
         int i;
         tui_clear();
-
-        tui_gotoxy(1, 1);
-        tui_puts("replace: ");
-        tui_color(TUI_LRED, TUI_BLACK);
-        tui_puts(original);
+        tui_gotoxy(1, 1); tui_puts("replace: ");
+        tui_color(TUI_LRED, TUI_BLACK); tui_puts(original);
         tui_color(TUI_LGRAY, TUI_BLACK);
-
-        tui_gotoxy(1, 2);
-        tui_puts("(q = quit, empty = cancel, letters only)");
-
+        tui_gotoxy(1, 2); tui_puts("(q = quit, empty = cancel, letters only)");
         tui_gotoxy(1, SCRH);
-        tui_color(TUI_BLACK, TUI_LGRAY);
-        tui_puts("new word: ");
+        tui_color(TUI_BLACK, TUI_LGRAY); tui_puts("new word: ");
         tui_color(TUI_LGRAY, TUI_BLACK);
 
-        if (read_line_at(11, SCRH, line, MAX_WORD) == 0) return 0;
-        if (line[0] == 'q' || line[0] == 'Q') return -1;
+        {
+            int r = read_line_at(11, SCRH, line, TS_MAX_WORD);
+            if (r < 0) return -1;      /* Esc = quit */
+            if (r == 0) return 0;      /* empty = cancel */
+        }
+        /* remove: if (line[0] == 'q' || line[0] == 'Q') return -1; */
 
         {
             int ok = 1;
@@ -386,15 +413,14 @@ static int ask_replacement(const char *original, char out[MAX_WORD]) {
         for (i = 0; line[i]; i++) key[i] = toupper((unsigned char)line[i]);
         key[i] = 0;
 
-        if (dict_lookup(key)) { strcpy(out, line); return 1; }
+        if (ts_check(key)) { strcpy(out, line); return 1; }
 
         {
-            static char gs[MAX_GUESSES][MAX_WORD];
-            char hdr[MAX_WORD + 32];
-            int ng;
-            int r;
+            static char gs[MAX_GUESSES][TS_MAX_WORD];
+            char hdr[TS_MAX_WORD + 32];
+            int ng, r;
             snprintf(hdr, sizeof hdr, "[%s] not found. replace [%s] with:", line, original);
-            ng = make_guesses(key, gs, MAX_GUESSES);
+            ng = ts_suggest(key, gs, MAX_GUESSES);
             r = prompt_choice(line, hdr, 0, 0, 0, (int)strlen(hdr), 0, gs, ng);
             if (r == -1) return -1;
             if (r == -2 || r == 0) continue;
@@ -403,158 +429,80 @@ static int ask_replacement(const char *original, char out[MAX_WORD]) {
     }
 }
 
-/* ---------- file save ---------- */
-static int save_file(const char *path, const char *text, int len) {
-    FILE *f = fopen(path, "wb");
-    if (!f) return 0;
-    fwrite(text, 1, len, f);
-    fclose(f);
-    return 1;
-}
+/* ---------- the one Tiny calls ---------- */
+int ts_fix_interactive(char **text, int *len)
+{
+    int pos = 0, fixes = 0, quit = 0;
+    char *t = *text;
+    int total = *len;
 
-/* ---------- main ---------- */
-int main(int argc, char **argv) {
-    const char *dictpath, *inpath, *outpath;
-    char *text, *tmp;
-    long n;
-    int len, pos = 0, fixes = 0, quit = 0;
-    FILE *f;
+    if (!t || total <= 0) return 0;
 
-    if (argc != 4) {
-        printf("usage: spell dict.smd input.txt output.txt\n");
-        return 1;
-    }
-    dictpath = argv[1]; inpath = argv[2]; outpath = argv[3];
-
-    /* take over the console */
-    tui_init();
-    tui_clear();
-
-    /* loading screen */
-    tui_gotoxy(1, 1);
-    tui_puts("loading ");
-    tui_puts(dictpath);
-    tui_puts("...");
-    if (!load_dict(dictpath)) {
-        tui_gotoxy(1, 2);
-        tui_puts("bad dictionary");
-        tui_gotoxy(1, SCRH);
-        tui_puts("press any key...");
-        tui_getch();
-        tui_restore();
-        return 1;
-    }
-    {
-        char msg[64];
-        snprintf(msg, sizeof msg, "%lu words loaded", word_count);
-        tui_gotoxy(1, 2);
-        tui_puts(msg);
-    }
-    tui_gotoxy(1, SCRH);
-
-    f = fopen(inpath, "rb");
-    if (!f) {
-        tui_clear();
-        tui_gotoxy(1, 1);
-        tui_puts("cannot open input");
-        tui_gotoxy(1, SCRH);
-        tui_puts("press any key...");
-        tui_getch();
-        tui_restore();
-        return 1;
-    }
-    fseek(f, 0, SEEK_END); n = ftell(f); fseek(f, 0, SEEK_SET);
-    text = (char *)malloc((size_t)n + 1);
-    if (!text) { fclose(f); tui_restore(); return 1; }
-    if (fread(text, 1, (size_t)n, f) != (size_t)n) { fclose(f); tui_restore(); return 1; }
-    fclose(f); len = (int)n; text[len] = 0;
-
-    tmp = (char *)malloc(strlen(outpath) + 5);
-    if (!tmp) { tui_restore(); return 1; }
-    sprintf(tmp, "%s.tmp", outpath);
-    save_file(tmp, text, len);
-
-    while (pos < len) {
+    while (pos < total) {
         int wstart, wlen, sbeg, send, ws, we;
-        char word[MAX_WORD], key[MAX_WORD];
+        char word[TS_MAX_WORD], key[TS_MAX_WORD];
         int i;
 
-        wlen = next_word(text, len, &pos, &wstart);
+        wlen = next_word(t, total, &pos, &wstart);
         if (wlen == 0) break;
-        if (wlen >= MAX_WORD) continue;
-        memcpy(word, text + wstart, wlen); word[wlen] = 0;
+        if (wlen >= TS_MAX_WORD) continue;
+        memcpy(word, t + wstart, wlen); word[wlen] = 0;
         for (i = 0; i < wlen; i++) key[i] = toupper((unsigned char)word[i]);
         key[wlen] = 0;
-        if (dict_lookup(key)) continue;
+        if (ts_check(key)) continue;
 
-        sentence_bounds(text, len, wstart, wstart + wlen, &sbeg, &send, &ws, &we);
+        sentence_bounds(t, total, wstart, wstart + wlen, &sbeg, &send, &ws, &we);
 
         {
-            static char gs[MAX_GUESSES][MAX_WORD];
-            int ng = make_guesses(key, gs, MAX_GUESSES);
-            int r = prompt_choice(word, text, sbeg, wstart, wlen, send, 1, gs, ng);
+            static char gs[MAX_GUESSES][TS_MAX_WORD];
+            int ng = ts_suggest(key, gs, MAX_GUESSES);
+            int r = prompt_choice(word, t, sbeg, wstart, wlen, send, 1, gs, ng);
+
             if (r == -1) { quit = 1; break; }
             if (r == -2 || r == 0) continue;
+
             if (r == -3) {
-                char rep[MAX_WORD];
+                char rep[TS_MAX_WORD];
                 int kk = ask_replacement(word, rep);
                 if (kk == -1) { quit = 1; break; }
                 if (kk == 0) continue;
                 {
                     int rl = (int)strlen(rep);
-                    char *nt = (char *)malloc((size_t)len + rl + 1);
+                    char *nt = (char *)malloc((size_t)total + rl + 1);
                     if (!nt) break;
-                    memcpy(nt, text, wstart);
+                    memcpy(nt, t, wstart);
                     memcpy(nt + wstart, rep, rl);
-                    memcpy(nt + wstart + rl, text + wstart + wlen, len - wstart - wlen + 1);
-                    free(text); text = nt;
-                    len = len - wlen + rl;
+                    memcpy(nt + wstart + rl, t + wstart + wlen, total - wstart - wlen + 1);
+                    free(t); t = nt;
+                    total = total - wlen + rl;
                     pos = wstart + rl;
-                    save_file(tmp, text, len);
                     fixes++;
                 }
                 continue;
             }
+
             {
-                char rep[MAX_WORD];
+                char rep[TS_MAX_WORD];
                 int rl;
                 match_case(word, gs[r-1], rep);
                 rl = (int)strlen(rep);
                 {
-                    char *nt = (char *)malloc((size_t)len + rl + 1);
+                    char *nt = (char *)malloc((size_t)total + rl + 1);
                     if (!nt) break;
-                    memcpy(nt, text, wstart);
+                    memcpy(nt, t, wstart);
                     memcpy(nt + wstart, rep, rl);
-                    memcpy(nt + wstart + rl, text + wstart + wlen, len - wstart - wlen + 1);
-                    free(text); text = nt;
-                    len = len - wlen + rl;
+                    memcpy(nt + wstart + rl, t + wstart + wlen, total - wstart - wlen + 1);
+                    free(t); t = nt;
+                    total = total - wlen + rl;
                     pos = wstart + rl;
-                    save_file(tmp, text, len);
                     fixes++;
                 }
             }
         }
     }
-    save_file(outpath, text, len);
-    remove(tmp);
 
-    /* completion screen */
-    tui_clear();
-    tui_gotoxy(1, 1);
-    {
-        char msg[128];
-        snprintf(msg, sizeof msg, "%d replacement%s%s",
-                 fixes, fixes == 1 ? "" : "s",
-                 quit ? " (quit early)" : "");
-        tui_puts(msg);
-    }
-    tui_gotoxy(1, 2);
-    tui_puts(outpath);
-    tui_gotoxy(1, SCRH);
-    tui_puts("press any key to return to editor...");
-    tui_getch();
-
-    free(tmp); free(text); free(dict);
-    tui_restore();
-    return 0;
+    *text = t;
+    *len = total;
+    (void)quit;
+    return fixes;
 }
