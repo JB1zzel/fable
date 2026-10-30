@@ -12,11 +12,11 @@ A small CMD text editor for Windows, built on a `tui.h` console abstraction. Sin
 - Spell-mark toggle: highlight misspellings in red on demand
 - Help screen (`F1`)
 
-![Fable editor](screenshots/block select.png)
+![Fable editor](screenshots/blockselect.png)
 
-![Fable editor](screenshots/spell checker.png)
+![Fable editor](screenshots/spellchecker.png)
 
-![Fable editor](screenshots/spelling highlighted.png)
+![Fable editor](screenshots/spellinghighlighted.png)
 
 ## Files
 
