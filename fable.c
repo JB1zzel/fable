@@ -59,6 +59,15 @@ static char  tmp_path[264];*/
 static void insert_char(int c);
 static void split_line(void);
 
+
+static void resolve_dict_path(void)
+{
+    char dir[260];
+    tui_exe_dir(dir, sizeof dir);
+    if (dir[0])
+        snprintf(dict_path, sizeof dict_path, "%sdict.smd", dir);
+}
+
 /* ---------- spell marks (F5) ---------- */
 
 static int spell_marks_on = 0;
@@ -1167,6 +1176,7 @@ int main(int argc, char **argv)
     lines[0][0] = '\0';
     nlines = 1;
     if (filename[0]) load_file(filename);
+    resolve_dict_path();
     
     if (ts_init(dict_path)) {
         spell_ok = 1;

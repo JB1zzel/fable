@@ -131,3 +131,12 @@ void tui_cursor(int visible, int block)
     ci.dwSize   = block ? 100 : 25;
     SetConsoleCursorInfo(hOut, &ci);
 }
+void tui_exe_dir(char *out, int len)
+{
+    DWORD n = GetModuleFileName(NULL, out, (DWORD)len);
+    char *p;
+    if (n == 0 || n >= (DWORD)len) { out[0] = '\0'; return; }
+    p = strrchr(out, '\\');
+    if (!p) { out[0] = '\0'; return; }
+    *(p + 1) = '\0';
+}

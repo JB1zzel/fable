@@ -1,5 +1,5 @@
 ==============================================================================
- TINY - a tiny text editor for Windows CMD
+ FABLE - a tiny text editor for Windows CMD
 ------------------------------------------------------------------------------
  Build:  tcc tiny.c tui_console.c tinyspell.c -luser32 -o tiny.exe
  Run:    tiny.exe              (untitled buffer)

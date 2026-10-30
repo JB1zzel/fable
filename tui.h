@@ -31,6 +31,8 @@
 /* Lifecycle */
 void tui_init(void);        /* enter full-screen mode */
 void tui_restore(void);     /* undo init; hand terminal back to the shell */
+void tui_cursor(int visible, int block);
+void tui_exe_dir(char *out, int len);      
 
 /* Screen */
 void tui_clear(void);
