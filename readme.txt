@@ -4,13 +4,19 @@ A small CMD text editor for Windows, built on a `tui.h` console abstraction. Sin
 
 ## What it does
 
-- Full-screen text editing in an 80×25 CMD window
+- Full-screen text editing in an 80x25 CMD window
 - Mark / cut / paste with an internal clipboard
 - Find, find & replace
 - Paragraph reflow to a chosen width (default 80, max 120), word-aware, skips indented blocks
 - In-process interactive spellchecker with suggestions
 - Spell-mark toggle: highlight misspellings in red on demand
 - Help screen (`F1`)
+
+![Fable editor](screenshots/block select.png)
+
+![Fable editor](screenshots/spell checker.png)
+
+![Fable editor](screenshots/spelling highlighted.png)
 
 ## Files
 
