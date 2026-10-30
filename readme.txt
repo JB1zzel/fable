@@ -1,4 +1,4 @@
-# Tiny text editor
+# Fable is a tiny text editor and Spellchecker
 
 A small CMD text editor for Windows, built on a `tui.h` console abstraction. Single binary, no installer, no dependencies beyond `dict.smd`.
 
