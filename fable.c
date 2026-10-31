@@ -131,8 +131,41 @@ static void spell_mark_all(void)
 static void spell_marks_off(void)
 {
     spell_marks_on = 0;
-    memset(spell_bad, 0, sizeof(spell_bad));
+    /*memset(spell_bad, 0, sizeof(spell_bad)); */
 }
+
+static void para_up(void)
+{
+    int ln = cur_line;
+    /* skip blank lines above */
+    while (ln > 0 && lines[ln][0] == '\0') ln--;
+    /* if we're on a non-blank line, we're in a paragraph — go to its top */
+    while (ln > 0 && lines[ln - 1][0] != '\0') ln--;
+    /* if we were already at the top, jump to the previous paragraph */
+    if (ln == cur_line) {
+        while (ln > 0 && lines[ln - 1][0] == '\0') ln--;
+        while (ln > 0 && lines[ln - 1][0] != '\0') ln--;
+    }
+    cur_line = ln;
+    cur_col  = 0;
+}
+
+static void para_down(void)
+{
+    int ln = cur_line;
+    /* skip blank lines below */
+    while (ln < nlines - 1 && lines[ln][0] == '\0') ln++;
+    /* if we're on a non-blank line, we're in a paragraph — go to its bottom */
+    while (ln < nlines - 1 && lines[ln + 1][0] != '\0') ln++;
+    /* if we were already at the bottom, jump to the next paragraph */
+    if (ln == cur_line) {
+        while (ln < nlines - 1 && lines[ln + 1][0] == '\0') ln++;
+        while (ln < nlines - 1 && lines[ln + 1][0] != '\0') ln++;
+    }
+    cur_line = ln;
+    cur_col  = 0;
+}
+
 
 /* ---------- mark + clipboard ---------- */
 
@@ -949,8 +982,14 @@ static void move_arrow(int code)
 {
     int shift = shift_down();
     switch (code) {
-    case 72: if (cur_line > 0) { cur_line--; clamp_col(); } break;
-    case 80: if (cur_line < nlines - 1) { cur_line++; clamp_col(); } break;
+    case 72:                                       /* Up */
+        if (shift) para_up();
+        else if (cur_line > 0) { cur_line--; clamp_col(); }
+        break;
+    case 80:                                       /* Down */
+        if (shift) para_down();
+        else if (cur_line < nlines - 1) { cur_line++; clamp_col(); }
+        break;
     case 75:
         if (shift) word_left();
         else if (cur_col > 0) cur_col--;
