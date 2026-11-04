@@ -112,7 +112,7 @@ static void filer_go_up(FilerState *s)
 
 static void filer_rescan(FilerState *s)
 {
-    //s->count = fab_dir_entries(s->path, s->entries, MAX_ENTRIES, &s->more);
+    s->count = fab_dir_entries(s->path, s->entries, MAX_ENTRIES);
     if (s->cursor >= s->count) s->cursor = s->count > 0 ? s->count - 1 : 0;
     if (s->cursor < 0) s->cursor = 0;
     if (s->scroll > s->cursor) s->scroll = s->cursor;

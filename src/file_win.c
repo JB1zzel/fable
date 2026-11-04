@@ -1,4 +1,13 @@
-/* file_win.c - Windows implementation of the fab_* file helpers. */
+/* file_win.c - Windows implementation of the fab_* file helpers.
+ *
+ * Paths are translated so that a "/"-style path (as used on the ESP32
+ * SD card) maps to the current working directory on Windows:
+ *
+ *   "/"         -> current directory
+ *   "/dict.smd" -> dict.smd in the current directory
+ *   "/foo/bar"  -> foo\bar
+ *   "foo/bar"   -> foo\bar
+ */
 
 #include <windows.h>
 #include <stdio.h>
@@ -7,22 +16,55 @@
 #include <time.h>
 #include "file_win.h"
 
+/* ---- path translation ---- */
+
+static void make_win_path(const char *path, char *out, int out_len)
+{
+    int i = 0, j = 0;
+
+    if (!path || path[0] == '\0' ||
+        (path[0] == '/' && path[1] == '\0')) {
+        out[0] = '\0';
+        return;
+    }
+
+    while (path[i] == '/') i++;
+    while (path[i] && j < out_len - 1) {
+        out[j++] = (path[i] == '/') ? '\\' : path[i];
+        i++;
+    }
+    out[j] = '\0';
+}
+
+/* ---- existence, remove, rename ---- */
+
 int fab_exists(const char *path)
 {
-    return GetFileAttributesA(path) != INVALID_FILE_ATTRIBUTES;
+    char win[MAX_PATH];
+    make_win_path(path, win, sizeof win);
+    if (win[0] == '\0') return 1;      /* current dir always exists */
+    return GetFileAttributesA(win) != INVALID_FILE_ATTRIBUTES;
 }
 
 int fab_remove(const char *path)
 {
-    return DeleteFileA(path) ? 0 : -1;
+    char win[MAX_PATH];
+    make_win_path(path, win, sizeof win);
+    if (win[0] == '\0') return -1;
+    return DeleteFileA(win) ? 0 : -1;
 }
 
 int fab_rename(const char *from, const char *to)
 {
-    return MoveFileA(from, to) ? 0 : -1;
+    char wfrom[MAX_PATH], wto[MAX_PATH];
+    make_win_path(from, wfrom, sizeof wfrom);
+    make_win_path(to, wto, sizeof wto);
+    if (wfrom[0] == '\0' || wto[0] == '\0') return -1;
+    return MoveFileA(wfrom, wto) ? 0 : -1;
 }
 
-/* case-insensitive name compare */
+/* ---- directory listing ---- */
+
 static int name_cmp(const char *a, const char *b)
 {
     while (*a && *b) {
@@ -51,6 +93,7 @@ static int cmp_entry(const void *pa, const void *pb)
 
 int fab_dir_entries(const char *path, FabDirEntry *out, int max)
 {
+    char win[MAX_PATH];
     char pattern[MAX_PATH];
     WIN32_FIND_DATAA fd;
     HANDLE h;
@@ -58,15 +101,12 @@ int fab_dir_entries(const char *path, FabDirEntry *out, int max)
 
     if (!out || max <= 0) return 0;
 
-    if (path[0] == '\0') {
+    make_win_path(path, win, sizeof win);
+
+    if (win[0] == '\0')
         snprintf(pattern, sizeof pattern, "*");
-    } else {
-        size_t len = strlen(path);
-        if (len > 0 && (path[len-1] == '/' || path[len-1] == '\\'))
-            snprintf(pattern, sizeof pattern, "%s*", path);
-        else
-            snprintf(pattern, sizeof pattern, "%s\\*", path);
-    }
+    else
+        snprintf(pattern, sizeof pattern, "%s\\*", win);
 
     h = FindFirstFileA(pattern, &fd);
     if (h == INVALID_HANDLE_VALUE) return 0;
@@ -82,11 +122,9 @@ int fab_dir_entries(const char *path, FabDirEntry *out, int max)
                         : (uint32_t)(((uint64_t)fd.nFileSizeHigh << 32) | fd.nFileSizeLow);
 
         {
-            /* convert FILETIME to unix epoch seconds */
             ULARGE_INTEGER t;
             t.LowPart  = fd.ftLastWriteTime.dwLowDateTime;
             t.HighPart = fd.ftLastWriteTime.dwHighDateTime;
-            /* FILETIME is 100ns ticks since 1601-01-01; subtract 11644473600s */
             out[n].mtime = (uint32_t)(t.QuadPart / 10000000ULL - 11644473600ULL);
         }
         n++;
@@ -97,6 +135,8 @@ int fab_dir_entries(const char *path, FabDirEntry *out, int max)
     if (n > 1) qsort(out, (size_t)n, sizeof(FabDirEntry), cmp_entry);
     return n;
 }
+
+/* ---- disk usage ---- */
 
 uint64_t fab_card_total(void)
 {
