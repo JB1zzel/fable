@@ -3,6 +3,7 @@
 #include <windows.h>
 #include <stdio.h>
 #include "file_win.h"
+#include "tui.h"
 
 extern int fable_main(int argc, char **argv);
 
@@ -18,6 +19,11 @@ int main(int argc, char **argv)
             fprintf(log, "dict.smd exists (Win32): %s\n",
                     GetFileAttributesA("dict.smd") != INVALID_FILE_ATTRIBUTES
                         ? "YES" : "NO");
+            {
+                char exedir[MAX_PATH];
+                tui_exe_dir(exedir, sizeof exedir);
+                fprintf(log, "exe folder: %s\n", exedir[0] ? exedir : "(unknown)");
+            }
             fprintf(log, "fab_exists(\"dict.smd\") = %d\n", fab_exists("dict.smd"));
             fprintf(log, "fab_exists(\"/dict.smd\") = %d\n", fab_exists("/dict.smd"));
             fprintf(log, "fab_exists(\"/\") = %d\n", fab_exists("/"));

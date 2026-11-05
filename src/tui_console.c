@@ -201,9 +201,23 @@ int tui_list_dir(const char *path, char names[][32], int max)
     return 0;
 }
 
+/* Folder that holds fable.exe, with a trailing backslash ("C:\\tools\\fable\\").
+ * The dictionary is looked up here, so it is found wherever Fable is
+ * started from. Returns "" if the folder cannot be determined (the default
+ * "/dict.smd" in the current folder is then used). */
 void tui_exe_dir(char *out, int len)
 {
+    char path[MAX_PATH];
+    DWORD n;
+    char *slash;
+
     if (len > 0) out[0] = '\0';
+    n = GetModuleFileNameA(NULL, path, sizeof path);
+    if (n == 0 || n >= sizeof path) return;
+    slash = strrchr(path, '\\');
+    if (!slash) return;
+    slash[1] = '\0';                         /* keep the trailing backslash */
+    if ((int)strlen(path) < len) strcpy(out, path);
 }
 
 /* ---------- Wi-Fi stubs (F9 does nothing on Windows) ---------- */
