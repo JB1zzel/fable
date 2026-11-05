@@ -8,6 +8,7 @@ extern int fable_main(int argc, char **argv);
 
 int main(int argc, char **argv)
 {
+    fab_mkdir("/diary");          /* the calendar (F6) saves here */
     {
         char cwd[MAX_PATH];
         FILE *log = fopen("fable.log", "w");
@@ -22,7 +23,7 @@ int main(int argc, char **argv)
             fprintf(log, "fab_exists(\"/\") = %d\n", fab_exists("/"));
             {
                 FabDirEntry e[8];
-                int n = fab_dir_entries("/", e, 8);
+                int n = fab_dir_entries("/", e, 8, NULL);
                 int i;
                 fprintf(log, "fab_dir_entries(\"/\") returned %d entries\n", n);
                 for (i = 0; i < n; i++)

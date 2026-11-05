@@ -4,7 +4,11 @@
  */
 
 #include <stdio.h>
+#ifdef FABLE_WINDOWS
+#include "file_win.h"
+#else
 #include "file_fabgl.h"
+#endif
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>

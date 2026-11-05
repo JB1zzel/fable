@@ -7,6 +7,9 @@
  *   "/dict.smd" -> dict.smd in the current directory
  *   "/foo/bar"  -> foo\bar
  *   "foo/bar"   -> foo\bar
+ *   "/../x.txt" -> ..\x.txt   (the parent folder: the Filer uses this
+ *                              to browse above the start folder)
+ *   "C:\a\b.txt" -> unchanged
  */
 
 #include <windows.h>
@@ -15,6 +18,8 @@
 #include <string.h>
 #include <time.h>
 #include "file_win.h"
+
+#undef fopen            /* file_win.h redirects fopen to fab_fopen below */
 
 /* ---- path translation ---- */
 
@@ -36,7 +41,24 @@ static void make_win_path(const char *path, char *out, int out_len)
     out[j] = '\0';
 }
 
-/* ---- existence, remove, rename ---- */
+/* ---- open, existence, remove, rename ---- */
+
+FILE *fab_fopen(const char *path, const char *mode)
+{
+    char win[MAX_PATH];
+    make_win_path(path, win, sizeof win);
+    if (win[0] == '\0') return NULL;      /* the folder itself is not a file */
+    return fopen(win, mode);
+}
+
+int fab_mkdir(const char *path)
+{
+    char win[MAX_PATH];
+    make_win_path(path, win, sizeof win);
+    if (win[0] == '\0') return 0;
+    if (CreateDirectoryA(win, NULL)) return 0;
+    return GetLastError() == ERROR_ALREADY_EXISTS ? 0 : -1;
+}
 
 int fab_exists(const char *path)
 {
@@ -91,44 +113,61 @@ static int cmp_entry(const void *pa, const void *pb)
     return name_cmp(a->name, b->name);
 }
 
-int fab_dir_entries(const char *path, FabDirEntry *out, int max)
+int fab_dir_entries(const char *path, FabDirEntry *out, int max, int *more)
 {
     char win[MAX_PATH];
     char pattern[MAX_PATH];
     WIN32_FIND_DATAA fd;
     HANDLE h;
+    BOOL ok;
     int n = 0;
 
+    if (more) *more = 0;
     if (!out || max <= 0) return 0;
 
     make_win_path(path, win, sizeof win);
 
-    if (win[0] == '\0')
+    /* build "<dir>\*" without doubling a trailing backslash */
+    if (win[0] == '\0') {
         snprintf(pattern, sizeof pattern, "*");
-    else
-        snprintf(pattern, sizeof pattern, "%s\\*", win);
+    } else {
+        size_t len = strlen(win);
+        snprintf(pattern, sizeof pattern, "%s%s*", win,
+                 (win[len - 1] == '\\') ? "" : "\\");
+    }
 
     h = FindFirstFileA(pattern, &fd);
     if (h == INVALID_HANDLE_VALUE) return 0;
 
-    do {
+    ok = TRUE;
+    while (ok) {
         const char *nm = fd.cFileName;
-        if (strcmp(nm, ".") == 0 || strcmp(nm, "..") == 0) continue;
 
-        strncpy(out[n].name, nm, sizeof(out[n].name) - 1);
-        out[n].name[sizeof(out[n].name) - 1] = '\0';
-        out[n].is_dir = (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) ? 1 : 0;
-        out[n].size   = out[n].is_dir ? 0
-                        : (uint32_t)(((uint64_t)fd.nFileSizeHigh << 32) | fd.nFileSizeLow);
-
-        {
-            ULARGE_INTEGER t;
-            t.LowPart  = fd.ftLastWriteTime.dwLowDateTime;
-            t.HighPart = fd.ftLastWriteTime.dwHighDateTime;
-            out[n].mtime = (uint32_t)(t.QuadPart / 10000000ULL - 11644473600ULL);
+        /* names too long for out[].name are skipped: a cut-off name would
+         * point at a file that does not exist */
+        if (strcmp(nm, ".") != 0 && strcmp(nm, "..") != 0 &&
+            strlen(nm) < sizeof(out[0].name)) {
+            if (n >= max) {                 /* out[] is full */
+                if (more) *more = 1;
+                break;
+            }
+            strncpy(out[n].name, nm, sizeof(out[n].name) - 1);
+            out[n].name[sizeof(out[n].name) - 1] = '\0';
+            out[n].is_dir = (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) ? 1 : 0;
+            out[n].size   = out[n].is_dir ? 0 : (uint32_t)fd.nFileSizeLow;
+            {
+                ULARGE_INTEGER t;
+                uint64_t secs;
+                t.LowPart  = fd.ftLastWriteTime.dwLowDateTime;
+                t.HighPart = fd.ftLastWriteTime.dwHighDateTime;
+                secs = (uint64_t)t.QuadPart / 10000000ULL;
+                out[n].mtime = secs > 11644473600ULL
+                             ? (uint32_t)(secs - 11644473600ULL) : 0;
+            }
+            n++;
         }
-        n++;
-    } while (n < max && FindNextFileA(h, &fd));
+        ok = FindNextFileA(h, &fd);
+    }
 
     FindClose(h);
 
