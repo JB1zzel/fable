@@ -17,8 +17,11 @@
 #define SCRH     24
 #endif
 
-//snake game
+/* games (F7 opens the menu) */
+int fb_game_menu(void);   /* 1 = show the menu again, 0 = back to the editor */
 int fb_snake(void);
+int fb_minesweeper(void);
+int fb_solitaire(void);
 /* prompt.c - single-line input on the current cursor position.
  * Return 0 on Enter, -1 on Esc (dest is then empty). */
 int  fb_prompt_line(const char *prompt, char *dest, int maxlen);

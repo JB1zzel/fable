@@ -15,7 +15,7 @@
  *   F4              interactive spellcheck (in-process, no save)
  *   F5              toggle spell marks (red misspellings)
  *   F6              diary calendar (one file per day in /diary)
- *   F7              snake game
+ *   F7              games menu (snake, minesweeper, solitaire)
  *   F9              Wi-Fi setup (ESP32 only)
  *   Ctrl+O          open file
  *   Ctrl+B          mark block; when you end the mark it is copied to clipboard
@@ -117,9 +117,10 @@ int fable_main(int argc, char **argv)
             } else if (code == 61) {              /* F3 */
                 ed_clear_mark();
                 ed_save_current();
-            } else if (code == 65) {              /* F7: snake */
+            } else if (code == 65) {              /* F7: games menu */
                 ed_clear_mark();
-                fb_snake();
+                while (fb_game_menu())            /* 1 = pick another game */
+                    tui_clear();
             } else if (code == 64) {              /* F6: calendar */
                 char path[300];
                 ed_clear_mark();
@@ -299,26 +300,35 @@ int fable_main(int argc, char **argv)
         case 14:                                  /* Ctrl+N */
             ed_new_document();
             break;
-        case 27:                                  /* Esc: cancel, else new doc */
+        case 27:                                  /* Esc: cancel, else file browser */
             if (ed_mark_active || ed_mark_exists) {
                 ed_clear_mark();
                 break;
             }
-            ed_new_document();
-            break;
-            if (ed_modified) {
-                int k;
-                ed_prompt_bar("Save before quit? (y/n) ");
-                k = tui_getch();
-                tui_color(TUI_LGRAY, TUI_BLACK);
-                if (k == 'y' || k == 'Y') ed_save_current();
+            {
+                int r = ed_new_document();
+#ifdef FABLE_WINDOWS
+                /* Windows has no other way out: Esc in the file browser quits */
+                if (r == ED_DOC_CANCELLED) {
+                    if (ed_modified) {            /* only if "n" was answered above */
+                        int k;
+                        ed_prompt_bar("Discard unsaved changes and quit? (y/n) ");
+                        k = tui_getch();
+                        tui_color(TUI_LGRAY, TUI_BLACK);
+                        if (k != 'y' && k != 'Y') break;
+                    }
+                    tui_cursor(1, 0);
+                    tui_clear();
+                    tui_restore();
+                    ts_free();
+                    tui_gotoxy(1, 1);
+                    return 0;
+                }
+#else
+                (void)r;
+#endif
             }
-            tui_cursor(1, 0);
-            tui_clear();
-            tui_restore();
-            ts_free();
-            tui_gotoxy(1, 1);
-            return 0;
+            break;
         case 13:
             ed_clear_mark();
             ed_split_line();

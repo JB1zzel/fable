@@ -39,7 +39,7 @@ void fb_help_screen(void)
     tui_gotoxy(1, 17);
     tui_puts("  F6            diary calendar (* = day has an entry)");
     tui_gotoxy(1, 18);
-    tui_puts("  F7            snake game");
+    tui_puts("  F7            games (snake, minesweeper, solitaire)");
 #ifdef FABLE_ESP32
     tui_gotoxy(1, 19);
     tui_puts("  F9            Wi-Fi setup");
