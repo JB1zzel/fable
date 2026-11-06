@@ -6,6 +6,9 @@
  * Build with: tcc fableGL.c ... tui_console.c file_win.c -luser32 -o fable.exe
  */
 
+#include "platform.h"
+
+#ifdef FABLE_WINDOWS
 #include <windows.h>
 #include <conio.h>
 #include <stdio.h>
@@ -220,27 +223,6 @@ void tui_exe_dir(char *out, int len)
     if ((int)strlen(path) < len) strcpy(out, path);
 }
 
-/* ---------- Wi-Fi stubs (F9 does nothing on Windows) ---------- */
-
-int tui_wifi_scan(char names[][33], int max) { (void)names; (void)max; return 0; }
-int tui_wifi_save(const char *ssid, const char *pass) { (void)ssid; (void)pass; return 0; }
-int tui_wifi_load(char *ssid, int ssid_len, char *pass, int pass_len) {
-    (void)ssid; (void)ssid_len; (void)pass; (void)pass_len;
-    return 0;
-}
-
-
-/* ---------- time formatting (used by clock.c) ---------- */
-
-/* clock.c calls fb_current_time_str which uses time()/localtime_r.
- * Windows doesn't have localtime_r, but it has localtime_s. Add a shim: */
-
-/* Not needed if compiled with -D_POSIX_C_SOURCE or similar. If localtime_r
- * is missing on your compiler, uncomment this: */
-/*
-struct tm *localtime_r(const time_t *t, struct tm *out)
-{
-    localtime_s(out, t);
-    return out;
-}
-*/
+#else
+typedef int tui_console_c_is_windows_only;   /* keeps this file from being empty */
+#endif

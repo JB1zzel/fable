@@ -12,6 +12,9 @@
  *   "C:\a\b.txt" -> unchanged
  */
 
+#include "platform.h"
+
+#ifdef FABLE_WINDOWS
 #include <windows.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -192,3 +195,7 @@ uint64_t fab_card_used(void)
         return (uint64_t)(total_bytes.QuadPart - free_bytes.QuadPart);
     return 0;
 }
+
+#else
+typedef int file_win_c_is_windows_only;   /* keeps this file from being empty */
+#endif

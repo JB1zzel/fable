@@ -39,6 +39,9 @@ int   fab_rename(const char *from, const char *to);
 /* 1 if the path exists (no error is logged when it does not). */
 int   fab_exists(const char *path);
 
+/* Creates a folder. 0 = created or already there. */
+int   fab_mkdir(const char *path);
+
 /* ---- structured directory listing for the Filer ---- */
 
 typedef struct {

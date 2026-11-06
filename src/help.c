@@ -40,8 +40,10 @@ void fb_help_screen(void)
     tui_puts("  F6            diary calendar (* = day has an entry)");
     tui_gotoxy(1, 18);
     tui_puts("  F7            snake game");
+#ifdef FABLE_ESP32
     tui_gotoxy(1, 19);
     tui_puts("  F9            Wi-Fi setup");
+#endif
     tui_gotoxy(1, 21);
     tui_puts("  Ctrl+F        find");
     tui_gotoxy(1, 22);

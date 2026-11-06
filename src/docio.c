@@ -6,11 +6,7 @@
 #include "tui.h"
 #include "editor.h"
 
-#ifdef FABLE_WINDOWS
-#include "file_win.h"
-#else
-#include "file_fabgl.h"
-#endif
+#include "fab_file.h"
 
 static int load_truncated = 0;
 

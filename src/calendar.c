@@ -11,7 +11,7 @@
 #include <string.h>
 #include <ctype.h>
 #include "tui.h"
-#include "file_fabgl.h"
+#include "fab_file.h"
 #include "fable.h"
 
 #define CAL_COLS    7
@@ -140,7 +140,7 @@ static unsigned long scan_entries(int year, int month)
 {
     unsigned long mask = 0;
     int d, dim = days_in_month(year, month);
-    char path[32];
+    char path[300];
 
     for (d = 1; d <= dim; d++) {
         diary_path(path, sizeof path, year, month, d);

@@ -7,15 +7,7 @@
 #include "tui.h"
 #include "fable.h"
 
-#ifdef FABLE_WINDOWS
-#include "file_win.h"
-#else
-#include "file_fabgl.h"
-#endif
-
-#ifdef FABLE_ESP32
-#include "esp_heap_caps.h"
-#endif
+#include "fab_file.h"
 
 #define MAX_ENTRIES  512
 #define LIST_TOP     4
@@ -46,18 +38,6 @@ typedef struct {
     uint64_t    card_total;     /* cached: SD.usedBytes() walks the FAT, */
     uint64_t    card_used;      /* so it is read once, not on every redraw */
 } FilerState;
-
-/* Big buffers go to PSRAM when there is some: internal RAM is needed by
- * the VGA driver. free() releases either kind. */
-static void *big_alloc(size_t n)
-{
-    void *p = NULL;
-#ifdef FABLE_ESP32
-    p = heap_caps_malloc(n, MALLOC_CAP_SPIRAM);
-#endif
-    if (!p) p = malloc(n);
-    return p;
-}
 
 static void filer_card_refresh(FilerState *s)
 {
@@ -522,7 +502,7 @@ static int filer_prompt(const char *prompt, char *dest, int maxlen)
 /* main entry */
 int fb_show_files(char *out_path, int out_len)
 {
-    FilerState *s = (FilerState *)big_alloc(sizeof(FilerState));
+    FilerState *s = (FilerState *)fable_big_calloc(1, sizeof(FilerState));
     int result = 0;
 
     if (!s) return 0;

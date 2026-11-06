@@ -16,7 +16,7 @@
  *   F5              toggle spell marks (red misspellings)
  *   F6              diary calendar (one file per day in /diary)
  *   F7              snake game
- *   F9              Wi-Fi setup
+ *   F9              Wi-Fi setup (ESP32 only)
  *   Ctrl+O          open file
  *   Ctrl+B          mark block; when you end the mark it is copied to clipboard
  *   Ctrl+X          mark, cut (delete) the block, clipboard keeps it
@@ -39,9 +39,6 @@
 #include <string.h>
 #include "tui.h"
 #include "tinyspell.h"
-#ifdef FABLE_ESP32
-#include "esp_heap_caps.h"
-#endif
 #include "editor.h"
 
 static void resolve_dict_path(void)
@@ -56,14 +53,11 @@ int fable_main(int argc, char **argv)
 {
     int ch;
 
-	#ifdef FABLE_ESP32
-    		ed_lines     = (char (*)[MAXLINE])heap_caps_calloc(MAXLINES, MAXLINE, MALLOC_CAP_SPIRAM);
-    		ed_spell_bad = (unsigned char (*)[MAXLINE / 8])heap_caps_calloc(MAXLINES, MAXLINE / 8, MALLOC_CAP_SPIRAM);
-	#else
-    		ed_lines     = (char (*)[MAXLINE])calloc(MAXLINES, MAXLINE);
-    		ed_spell_bad = (unsigned char (*)[MAXLINE / 8])calloc(MAXLINES, MAXLINE / 8);
-	#endif
-    		if (!ed_lines || !ed_spell_bad) return 1;
+    ed_lines     = (char (*)[MAXLINE])fable_big_calloc(MAXLINES, MAXLINE);
+    ed_spell_bad = (unsigned char (*)[MAXLINE / 8])fable_big_calloc(MAXLINES, MAXLINE / 8);
+    if (!ed_lines || !ed_spell_bad) return 1;
+
+    diary_init();                    /* make sure the diary folder exists */
 
     tui_init();
     tui_clear();
@@ -127,7 +121,7 @@ int fable_main(int argc, char **argv)
                 ed_clear_mark();
                 fb_snake();
             } else if (code == 64) {              /* F6: calendar */
-                char path[64];
+                char path[300];
                 ed_clear_mark();
                 if (diary_pick(path, sizeof path)) {
                     if (!ed_load_file(path)) {
@@ -144,9 +138,11 @@ int fable_main(int argc, char **argv)
                     strncpy(ed_filename, path, sizeof(ed_filename) - 1);
                     ed_filename[sizeof(ed_filename) - 1] = '\0';
                 }
+#ifdef FABLE_ESP32
             } else if (code == 67) {              /* F9: Wi-Fi setup */
-               ed_clear_mark();
-               fb_wifi_setup_page();
+                ed_clear_mark();
+                fb_wifi_setup_page();
+#endif
             } else if (code == 62) {              /* F4 */
                 ed_spell_check();
             } else if (code == 63) {              /* F5: toggle spell marks */

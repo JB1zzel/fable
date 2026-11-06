@@ -6,6 +6,8 @@
 #ifndef FABLE_H
 #define FABLE_H
 
+#include "platform.h"
+
 #define MAXLINES 256
 #define MAXLINE  1024
 #define SCRW     80
@@ -31,8 +33,10 @@ void fb_help_screen(void);
 int  fb_show_files(char *out_path, int out_len);
 /* clock.c */
 void fb_current_time_str(char *out, int out_len);   /* "YYYY-MM-DD HH:MM" or "" */
+#ifdef FABLE_ESP32
 void fb_wifi_setup_page(void);
 void set_boot_wifi_ssid(const char *s);
+#endif
 
 /* calendar.c */
 int  calendar_show(const char *now, char *out_path, int out_len);
@@ -40,5 +44,6 @@ int  calendar_show(const char *now, char *out_path, int out_len);
 /* diary.c */
 void diary_path(char *out, int out_len, int year, int month, int day);
 int  diary_pick(char *out_path, int out_len);   /* 1 = a day was chosen */
+void diary_init(void);                          /* create the diary folder */
 
 #endif
